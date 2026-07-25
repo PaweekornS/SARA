@@ -1,0 +1,105 @@
+services:
+  # -------------------------------
+  # 1. PostgreSQL Database
+  # -------------------------------
+  db:
+    image: postgres:15-alpine
+    container_name: aiaas_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: aiaas_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------
+  # 2. Redis Task Broker & Queue
+  # ---------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: aiaas_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------
+  # 3. FastAPI Web Server
+  # ---------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aiaas_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
+      - REDIS_URL=redis://redis:6379/0
+      - MCP_SERVER_URL=http://mcp_server:8001/mcp
+    volumes:
+      - shared_tmp:/tmp
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------
+  # 4. Celery Background Worker (Runs ASR & Qwen LLM)
+  # ---------------------------------
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aiaas_celery_worker
+    restart: always
+    # Override startup command to run as Celery worker
+    command: celery -A app.workers.tasks.celery_app worker --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
+      - REDIS_URL=redis://redis:6379/0
+      - MCP_SERVER_URL=http://mcp_server:8001/mcp
+    volumes:
+      - shared_tmp:/tmp
+    depends_on:
+      - backend
+      - redis
+      - mcp_server
+
+  # -------------------------------------
+  # 5. MCP Server (Email Dispatcher Tool)
+  # -------------------------------------
+  mcp_server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aiaas_mcp_server
+    restart: always
+    ports:
+      - "8001:8001"
+    # Override startup command to run FastMCP Server
+    command: python mcp_server.py
+    env_file:
+      - .env
+
+volumes:
+  postgres_data:
+  shared_tmp:
