@@ -110,36 +110,32 @@ def send_smtp_email(to_email: str, subject: str, html_content: str):
 # 4. Expose the MCP Tool
 @mcp.tool(
     name="send_meeting_summary_email",
-    description="Sends formatted HTML meeting summaries and action items to participant email addresses."
+    description="Sends formatted HTML meeting summaries and action items to a list of participant email addresses."
 )
 async def send_meeting_summary_email(
     subject: str,
     summary_bullets: List[str],
-    action_items: List[ActionItem],
+    recipient_emails: List[str],  # <--- List of recipient emails
+    action_items: List[dict],
     ctx: Context
 ) -> str:
-    """
-    MCP Tool entrypoint to trigger email dispatch.
-    """
     await ctx.info(f"Preparing meeting email dispatch for subject: '{subject}'")
 
-    # Render Jinja2 Template
+    # Render HTML Body
     template = Template(HTML_EMAIL_TEMPLATE)
     html_body = template.render(
         subject=subject,
         summary_bullets=summary_bullets,
-        action_items=[item.model_dump() for item in action_items]
+        action_items=action_items
     )
 
-    # Collect unique recipient emails
-    recipient_emails = list({item.email for item in action_items})
-    
     if not recipient_emails:
-        return "No action item recipients found. Email delivery skipped."
+        return "No participant emails provided. Delivery skipped."
 
     sent_count = 0
     failed_emails = []
 
+    # Send to every participant email in the list
     for email in recipient_emails:
         try:
             send_smtp_email(to_email=email, subject=subject, html_content=html_body)
@@ -149,11 +145,7 @@ async def send_meeting_summary_email(
             await ctx.error(f"Failed to send email to {email}: {err}")
             failed_emails.append(email)
 
-    result_msg = f"Email summary sent to {sent_count}/{len(recipient_emails)} recipients."
-    if failed_emails:
-        result_msg += f" Failed recipients: {', '.join(failed_emails)}"
-
-    return result_msg
+    return f"Email summary delivered to {sent_count}/{len(recipient_emails)} participants."
 
 
 # 5. Entry Point: SSE / HTTP or Stdio Transport
