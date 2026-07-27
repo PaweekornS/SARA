@@ -1,23 +1,12 @@
-import asyncio
 import logging
+import asyncio
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-def dispatch_mcp_email_tool(meeting_title: str, action_items: list, summary: list):
-    """
-    Synchronous wrapper to run the async MCP client dispatch.
-    """
-    logger.info(f"Triggering MCP dispatch for: {meeting_title}")
-    try:
-        asyncio.run(_async_dispatch(meeting_title, action_items, summary))
-    except Exception as e:
-        logger.error(f"Failed to dispatch MCP email tool: {e}")
-        raise e
-
-async def _async_dispatch(meeting_title: str, action_items: list, summary: list):
+async def _async_dispatch(meeting_title: str, recipient_emails: list, action_items: list, summary: list):
     """
     Asynchronously connects to the FastMCP SSE server and calls the send_meeting_summary_email tool.
     """
@@ -42,9 +31,41 @@ async def _async_dispatch(meeting_title: str, action_items: list, summary: list)
                 arguments={
                     "subject": meeting_title,
                     "summary_bullets": summary,
+                    "recipient_emails": recipient_emails,
                     "action_items": action_items
                 }
             )
             
             logger.info(f"MCP tool call response: {response}")
             return response
+
+def dispatch_mcp_email_tool(meeting_title: str, participants: list, action_items: list, summary: list):
+    """
+    Invokes the local MCP Server tool to email all meeting participants.
+    """
+    # 1. Extract participant emails
+    recipient_emails = [p["email"] for p in participants if "email" in p]
+
+    # 2. Add MVP Mock Email fallback if no emails were found
+    if not recipient_emails:
+        recipient_emails = ["demo_participant@example.com", "your_test_email@gmail.com"]
+
+    try:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        result = loop.run_until_complete(
+            _async_dispatch(
+                meeting_title=meeting_title,
+                recipient_emails=recipient_emails,
+                action_items=action_items,
+                summary=summary
+            )
+        )
+        return result
+    except Exception as err:
+        logger.error(f"[MCP Error] Failed to trigger email tool: {err}")
+        return None

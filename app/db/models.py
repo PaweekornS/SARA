@@ -37,6 +37,7 @@ class Meeting(Base):
 
     owner = relationship("User", back_populates="meetings")
     action_items = relationship("ActionItem", back_populates="meeting")
+    chat_messages = relationship("ChatMessage", back_populates="meeting", cascade="all, delete-orphan")
 
 class ActionItem(Base):
     __tablename__ = "action_items"
@@ -62,3 +63,14 @@ class APIKey(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="api_keys")
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    meeting_id = Column(UUID(as_uuid=True), ForeignKey("meetings.id"), nullable=False)
+    role = Column(String, nullable=False)  # "user" or "assistant"
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    meeting = relationship("Meeting", back_populates="chat_messages")
