@@ -40,8 +40,8 @@ services:
   # ---------------------------------
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile.backend
     container_name: aiaas_backend
     restart: always
     ports:
@@ -65,8 +65,8 @@ services:
   # ---------------------------------
   celery_worker:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile.backend
     container_name: aiaas_celery_worker
     restart: always
     # Override startup command to run as Celery worker
@@ -89,8 +89,8 @@ services:
   # -------------------------------------
   mcp_server:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ./backend
+      dockerfile: Dockerfile.backend
     container_name: aiaas_mcp_server
     restart: always
     ports:
@@ -99,6 +99,22 @@ services:
     command: python mcp_server.py
     env_file:
       - .env
+
+  # -------------------------------------
+  # 6. Next.js Web Frontend
+  # -------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+    container_name: aiaas_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
