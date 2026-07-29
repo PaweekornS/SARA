@@ -48,8 +48,8 @@ async def health_check():
     return {
         "status": "healthy",
         "service": settings.PROJECT_NAME,
-        "llm_provider": "OpenRouter (Qwen)",
-        "asr_status": "OpenRouter (Whisper)"
+        "llm_provider": f"AI4Thai Pathumma ({settings.PATHUMMA_MODEL_NAME})",
+        "asr_status": f"AI4Thai ASR ({settings.ASR_MODEL})"
     }
 
 if __name__ == "__main__":

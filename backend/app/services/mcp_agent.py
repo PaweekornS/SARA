@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import requests
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from app.core.config import settings
@@ -39,16 +40,43 @@ async def _async_dispatch(meeting_title: str, recipient_emails: list, action_ite
             logger.info(f"MCP tool call response: {response}")
             return response
 
+def get_recipients_from_api() -> list:
+    """
+    Calls the local FastAPI /meetings/recipients endpoint to retrieve recipient emails.
+    """
+    try:
+        # Try connecting via localhost (if running natively)
+        url = f"http://localhost:8000{settings.API_V1_STR}/meetings/recipients"
+        response = requests.get(url, timeout=2)
+        if response.status_code == 200:
+            return response.json()
+    except Exception as e:
+        logger.warning(f"Could not connect to localhost API, trying backend host: {e}")
+        try:
+            # Try connecting via container name (if running inside docker compose)
+            url_docker = f"http://backend:8000{settings.API_V1_STR}/meetings/recipients"
+            response = requests.get(url_docker, timeout=2)
+            if response.status_code == 200:
+                return response.json()
+        except Exception as ex:
+            logger.warning(f"Could not connect to backend API: {ex}")
+    
+    return []
+
 def dispatch_mcp_email_tool(meeting_title: str, participants: list, action_items: list, summary: list):
     """
     Invokes the local MCP Server tool to email all meeting participants.
     """
-    # 1. Extract participant emails
-    recipient_emails = [p["email"] for p in participants if "email" in p]
+    # 1. Fetch recipient emails from our local API/mock endpoint
+    recipient_emails = get_recipients_from_api()
 
-    # 2. Add MVP Mock Email fallback if no emails were found
-    if not recipient_emails:
-        recipient_emails = ["demo_participant@example.com", "your_test_email@gmail.com"]
+    # Support merging any other emails dynamically passed in the participants list
+    if participants:
+        for p in participants:
+            if isinstance(p, dict) and "email" in p:
+                email = p["email"]
+                if email not in recipient_emails:
+                    recipient_emails.append(email)
 
     try:
         try:

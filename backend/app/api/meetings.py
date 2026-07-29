@@ -86,7 +86,7 @@ async def ask_question(
             detail="Transcript is not available yet. Meeting status is still processing or failed."
         )
 
-    # 2. Get answer from Qwen 3.5 via OpenRouter
+    # 2. Get answer from Qwen 3.5 via AI4Thai / Pathumma
     answer = ask_meeting_question(
         transcript=meeting.raw_transcript,
         question=payload.question,
@@ -98,3 +98,10 @@ async def ask_question(
         "question": payload.question,
         "answer": answer
     }
+
+@router.get("/recipients", response_model=List[str])
+async def get_recipient_emails():
+    """
+    Mock API that returns the list of recipient emails for the meeting platform integration.
+    """
+    return ["test01@gmail.com", "test02@gmail.com"]
