@@ -89,10 +89,10 @@ def send_smtp_email(to_email: str, subject: str, html_content: str):
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASSWORD")
+    smtp_pass = os.getenv("APP_SMTP_PASSWORD")
 
     if not smtp_user or not smtp_pass:
-        raise ValueError("SMTP_USER and SMTP_PASSWORD environment variables are required.")
+        raise ValueError("SMTP_USER and APP_SMTP_PASSWORD environment variables are required.")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
