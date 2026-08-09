@@ -4,16 +4,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Optional
 from pydantic import BaseModel, EmailStr, Field
-from mcp.server.fastmcp import FastMCP, Context
+try:
+    from fastmcp import FastMCP, Context
+except ImportError:
+    from mcp.server.fastmcp import FastMCP, Context
 from jinja2 import Template
 
 # 1. Initialize FastMCP Server
-mcp = FastMCP(
-    "Corporate-Meeting-Email-Server",
-    host="0.0.0.0",
-    port=8001,
-    dependencies=["pydantic", "jinja2"]
-)
+mcp = FastMCP("Corporate-Meeting-Email-Server")
 
 # 2. Define Pydantic Schemas for Strict Input Validation
 class ActionItem(BaseModel):
@@ -151,4 +149,12 @@ async def send_meeting_summary_email(
 # 5. Entry Point: SSE / HTTP or Stdio Transport
 if __name__ == "__main__":
     # Runs the MCP server with HTTP/SSE transport on port 8001
-    mcp.run(transport="sse")
+    os.environ.setdefault("FASTMCP_HOST", "0.0.0.0")
+    os.environ.setdefault("FASTMCP_PORT", "8001")
+    if hasattr(mcp, "settings"):
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = 8001
+    try:
+        mcp.run(transport="sse", host="0.0.0.0", port=8001)
+    except TypeError:
+        mcp.run(transport="sse")
