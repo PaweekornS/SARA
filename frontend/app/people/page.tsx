@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { Building2, Plus, Search, Tag, Trash2, UserPlus, X } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/app-shell";
-import { Badge, Button, Card, CardHead, EmptyState, Field, Input, Modal, cn } from "@/components/ui";
+import { Badge, Button, Card, CardHead, ConfirmModal, EmptyState, Field, Input, Modal, cn } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { addAlias, deletePerson, removeAlias, upsertPerson, useApp } from "@/lib/store";
 import type { Person } from "@/lib/types";
@@ -16,6 +16,7 @@ export default function PeoplePage() {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<Person | null>(null);
   const [creating, setCreating] = useState<"person" | "department" | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Person | null>(null);
 
   const rows = db.people.filter((p) => {
     if (!query.trim()) return true;
@@ -130,9 +131,7 @@ export default function PeoplePage() {
                     </div>
 
                     <button
-                      onClick={() => {
-                        if (confirm(t.pick(`ลบ ${p.full_name} ออกจากทะเบียน?`, `Remove ${p.full_name}?`))) deletePerson(p.id);
-                      }}
+                      onClick={() => setPendingDelete(p)}
                       className="shrink-0 rounded p-2 text-ink-4 hover:bg-sunken hover:text-[var(--danger)] cursor-pointer"
                     >
                       <Trash2 size={14} />
@@ -144,6 +143,22 @@ export default function PeoplePage() {
           )}
         </Card>
       </PageBody>
+
+      <ConfirmModal
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title={t.pick("ลบออกจากทะเบียน", "Remove from registry")}
+        confirmLabel={t("delete")}
+        onConfirm={() => {
+          if (pendingDelete) deletePerson(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+      >
+        {t.pick(
+          `ชื่อเรียกทั้งหมดของ “${pendingDelete?.full_name ?? ""}” จะถูกลบไปด้วย มติที่มอบหมายไว้จะไม่มีผู้รับผิดชอบ`,
+          `All aliases for “${pendingDelete?.full_name ?? ""}” will be removed too.`,
+        )}
+      </ConfirmModal>
 
       <PersonModal
         open={editing !== null || creating !== null}

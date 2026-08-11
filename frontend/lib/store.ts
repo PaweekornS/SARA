@@ -16,7 +16,6 @@ import {
   formatThaiDate,
   overdueDays,
   relevance,
-  shortText,
   thaiGrams,
 } from "./domain";
 import {
@@ -870,12 +869,14 @@ export function generateAgenda(series_id: Uuid): Uuid {
   open.forEach((r, i) => {
     const assignees = r.assignee_ids.map((id) => db.people.find((p) => p.id === id)?.full_name).filter(Boolean).join(", ");
     const od = overdueDays(r);
-    /* หัวข้อวาระเขียนเป็น "เรื่อง ..." ตามรูปแบบราชการ ไม่ใช่ยกข้อความมติทั้งดุ้นมาเป็นหัวข้อ */
+    /* หัวข้อวาระเขียนเป็น "เรื่อง ..." ตามรูปแบบราชการ
+       เก็บข้อความเต็มไว้เสมอ ห้ามตัดด้วย "…" เพราะจะติดไปในเอกสารราชการที่ export
+       ถ้ายาวเกินในหน้าจอ ให้ตัดด้วย CSS ที่ชั้นแสดงผลแทน */
     const topic = r.text.replace(/^(ที่ประชุมมีมติให้|มอบหมายให้|อนุมัติให้|อนุมัติ|ให้)\s*/, "");
     push(
       3,
       i + 1,
-      `เรื่อง ${shortText(topic, 52)}`,
+      `เรื่อง ${topic}`,
       [
         `มติเดิม: “${r.text}”`,
         `ที่มา: การประชุมครั้งที่ ${db.meetings.find((m) => m.id === r.origin_meeting_id)?.sequence_no ?? "-"}/2569 ${r.origin_agenda_item ?? ""} (${r.ref_no})`,

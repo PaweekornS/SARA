@@ -15,8 +15,10 @@ import {
   Printer,
   ScrollText,
   Timer,
+  Upload,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/app-shell";
+import { UploadMeetingModal } from "@/components/meeting-ingest";
 import { ResolutionDrawer, ResolutionRow } from "@/components/resolution-detail";
 import { Badge, Button, Card, CardHead, EmptyState, StatTile, StatusPill, cn, statusColor } from "@/components/ui";
 import { useT } from "@/lib/i18n";
@@ -39,6 +41,7 @@ export default function SeriesDashboardPage() {
   const seriesId = params.id;
   const series = db.series.find((s) => s.id === seriesId);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   if (!series) {
     return (
@@ -100,10 +103,12 @@ export default function SeriesDashboardPage() {
               {t("exportPdf")}
             </Button>
             <Link href={`/series/${seriesId}/agenda`}>
-              <Button variant="primary" icon={<ScrollText size={15} />}>
-                {t("generateAgenda")}
-              </Button>
+              <Button icon={<ScrollText size={15} />}>{t("generateAgenda")}</Button>
             </Link>
+            {/* งานที่เลขาฯ ทำบ่อยที่สุด ต้องอยู่ห่างจากหน้าแรกแค่คลิกเดียว */}
+            <Button variant="primary" icon={<Upload size={15} />} onClick={() => setUploadOpen(true)}>
+              {t("uploadMeeting")}
+            </Button>
           </>
         }
       />
@@ -171,7 +176,7 @@ export default function SeriesDashboardPage() {
           </div>
         </Card>
 
-        <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+        <div className="grid items-start gap-5 lg:grid-cols-[1.35fr_1fr]">
           {/* มติค้าง เรียงตามวันที่เกิน — FR-M6-03 */}
           <Card className="overflow-hidden">
             <CardHead
@@ -320,6 +325,7 @@ export default function SeriesDashboardPage() {
       </PageBody>
 
       <ResolutionDrawer resolutionId={openId} onClose={() => setOpenId(null)} />
+      <UploadMeetingModal open={uploadOpen} onClose={() => setUploadOpen(false)} seriesId={seriesId} />
     </>
   );
 }

@@ -13,6 +13,7 @@ import {
   ArrowLeft,
   BadgeCheck,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Download,
   ListChecks,
@@ -100,6 +101,19 @@ export default function MeetingReviewPage() {
   const canApprove = !processing && !failed && pending.length === 0 && unmapped.length === 0;
   const approved = meeting.status === "approved" || meeting.status === "distributed";
 
+  /* ปุ่มที่กดไม่ได้โดยไม่บอกเหตุผล คือทางตัน — บอกให้ชัดว่าเหลืออะไรและกดไปทำต่อได้ที่ไหน */
+  const blockers: Array<{ label: string; tab: Tab }> = [];
+  if (pending.length > 0)
+    blockers.push({
+      label: t.pick(`ตรวจข้อเสนอที่เหลืออีก ${pending.length} รายการ`, `${pending.length} proposals left to review`),
+      tab: "proposals",
+    });
+  if (unmapped.length > 0)
+    blockers.push({
+      label: t.pick(`ระบุตัวผู้พูดอีก ${unmapped.length} คน`, `${unmapped.length} speakers unidentified`),
+      tab: "speakers",
+    });
+
   return (
     <>
       <PageHeader
@@ -155,6 +169,25 @@ export default function MeetingReviewPage() {
       />
 
       <PageBody className="space-y-5">
+        {/* เหลืออะไรก่อนรับรองได้ — กดที่ป้ายเพื่อกระโดดไปทำต่อได้เลย */}
+        {!processing && !failed && !approved && blockers.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2.5 rounded-[var(--radius)] border border-line bg-surface px-4 py-3">
+            <span className="text-[13px] text-ink-2">
+              {t.pick(`เหลืออีก ${blockers.length} อย่างก่อนรับรองรายงานได้:`, "Before you can approve:")}
+            </span>
+            {blockers.map((b) => (
+              <button
+                key={b.tab}
+                onClick={() => setTab(b.tab)}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--warn-bg)] px-3 py-1 text-[12.5px] font-medium text-[var(--warn)] hover:brightness-95 cursor-pointer"
+              >
+                {b.label}
+                <ChevronRight size={13} />
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* กำลังประมวลผล / ล้มเหลว */}
         {(processing || failed) && (
           <Card>

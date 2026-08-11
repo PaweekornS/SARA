@@ -6,7 +6,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { ArrowRight, CalendarDays, Layers, Plus, Trash2, Users } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/app-shell";
-import { Button, Card, EmptyState, Field, Input, Modal, Select } from "@/components/ui";
+import { Button, Card, ConfirmModal, EmptyState, Field, Input, Modal, Select } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import {
   createSeries,
@@ -15,7 +15,7 @@ import {
   seriesStats,
   useApp,
 } from "@/lib/store";
-import type { Cadence } from "@/lib/types";
+import type { Cadence, MeetingSeries } from "@/lib/types";
 
 const CADENCE_LABEL: Record<Cadence, [string, string]> = {
   monthly: ["รายเดือน", "Monthly"],
@@ -28,6 +28,7 @@ export default function SeriesListPage() {
   const t = useT();
   const { db } = useApp();
   const [open, setOpen] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<MeetingSeries | null>(null);
 
   return (
     <>
@@ -65,22 +66,19 @@ export default function SeriesListPage() {
               const meetingCount = db.meetings.filter((m) => m.series_id === s.id).length;
               return (
                 <Card key={s.id} className="group relative overflow-hidden p-5 transition-shadow hover:shadow-[var(--shadow-2)]">
-                  <div className="flex items-start justify-between gap-3">
+                  {/* ทั้งใบคลิกได้ ไม่ใช่เฉพาะตัวหนังสือ — ปุ่มลบซ้อนทับอยู่ด้านบนด้วย z-index */}
+                  <Link href={`/series/${s.id}`} className="absolute inset-0" aria-label={s.name} />
+
+                  <div className="pointer-events-none relative flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[11px] font-medium uppercase tracking-wider text-ink-4">{s.committee_type}</p>
-                      <Link
-                        href={`/series/${s.id}`}
-                        className="mt-1 block text-[16px] font-semibold leading-snug text-ink hover:text-brand"
-                      >
+                      <p className="mt-1 text-[16px] font-semibold leading-snug text-ink group-hover:text-brand">
                         {s.name}
-                      </Link>
+                      </p>
                     </div>
                     <button
-                      onClick={() => {
-                        if (confirm(t.pick(`ลบ "${s.name}" และข้อมูลทั้งหมดภายใน?`, `Delete "${s.name}"?`)))
-                          deleteSeries(s.id);
-                      }}
-                      className="rounded p-1.5 text-ink-4 opacity-0 transition-opacity hover:bg-sunken hover:text-[var(--danger)] group-hover:opacity-100 cursor-pointer"
+                      onClick={() => setPendingDelete(s)}
+                      className="pointer-events-auto relative rounded p-1.5 text-ink-4 opacity-0 transition-opacity hover:bg-sunken hover:text-[var(--danger)] group-hover:opacity-100 cursor-pointer"
                       title={t("delete")}
                     >
                       <Trash2 size={14} />
@@ -94,7 +92,7 @@ export default function SeriesListPage() {
                     <MiniStat label={t.pick("ประชุมแล้ว", "Meetings")} value={meetingCount} />
                   </div>
 
-                  <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12.5px] text-ink-3">
+                  <div className="pointer-events-none relative mt-4 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12.5px] text-ink-3">
                     <span className="inline-flex items-center gap-1.5">
                       <Users size={13} /> {s.member_ids.length} {t.pick("ท่าน", "members")}
                     </span>
@@ -104,14 +102,10 @@ export default function SeriesListPage() {
                       {s.next_meeting_date ? formatThaiDate(s.next_meeting_date, true) : "-"}
                     </span>
                     <span>{CADENCE_LABEL[s.cadence][t.lang === "th" ? 0 : 1]}</span>
+                    <span className="ml-auto inline-flex items-center gap-1.5 font-medium text-brand transition-all group-hover:gap-2.5">
+                      {t.pick("เปิดภาพรวมมติ", "Open dashboard")} <ArrowRight size={14} />
+                    </span>
                   </div>
-
-                  <Link
-                    href={`/series/${s.id}`}
-                    className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-medium text-brand hover:gap-2.5 transition-all"
-                  >
-                    {t.pick("เปิดภาพรวมมติ", "Open dashboard")} <ArrowRight size={14} />
-                  </Link>
                 </Card>
               );
             })}
@@ -120,6 +114,22 @@ export default function SeriesListPage() {
       </PageBody>
 
       <CreateSeriesModal open={open} onClose={() => setOpen(false)} />
+
+      <ConfirmModal
+        open={pendingDelete !== null}
+        onClose={() => setPendingDelete(null)}
+        title={t.pick("ลบชุดการประชุม", "Delete series")}
+        confirmLabel={t("delete")}
+        onConfirm={() => {
+          if (pendingDelete) deleteSeries(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+      >
+        {t.pick(
+          `การประชุมและมติทั้งหมดใน “${pendingDelete?.name ?? ""}” จะถูกลบไปด้วย และกู้คืนไม่ได้`,
+          `All meetings and resolutions in “${pendingDelete?.name ?? ""}” will be deleted permanently.`,
+        )}
+      </ConfirmModal>
     </>
   );
 }

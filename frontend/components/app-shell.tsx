@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { useT } from "@/lib/i18n";
 import { hydrate, resetDemo, setLang, toggleTheme, useApp } from "@/lib/store";
-import { cn } from "./ui";
+import { ConfirmModal, cn } from "./ui";
 
 /* ── โครงหน้า: แถบซ้าย + เนื้อหา ─────────────────────────────────────── */
 
@@ -62,6 +62,7 @@ function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => 
   const base = `/series/${activeSeries?.id ?? ""}`;
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
 
   const seriesNav = [
     { href: base, label: t("navDashboard"), icon: <Gauge size={16} />, exact: true },
@@ -187,10 +188,7 @@ function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => 
             </button>
           </div>
           <button
-            onClick={() => {
-              if (confirm(t.pick("ล้างข้อมูลทั้งหมดและกลับไปที่ข้อมูลตั้งต้นของเดโม?", "Reset all data to demo seed?")))
-                resetDemo();
-            }}
+            onClick={() => setResetOpen(true)}
             className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius)] px-2 py-2 text-[12px] text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer"
           >
             <RotateCcw size={13} />
@@ -198,6 +196,23 @@ function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => 
           </button>
         </div>
       </aside>
+
+      <ConfirmModal
+        open={resetOpen}
+        onClose={() => setResetOpen(false)}
+        title={t("resetDemo")}
+        confirmLabel={t.pick("ล้างข้อมูล", "Reset")}
+        cancelLabel={t("cancel")}
+        onConfirm={() => {
+          resetDemo();
+          setResetOpen(false);
+        }}
+      >
+        {t.pick(
+          "การประชุม มติ และวาระที่สร้างระหว่างทดลองใช้จะหายทั้งหมด แล้วกลับไปเป็นข้อมูลตั้งต้นของเดโม",
+          "Everything created during this session will be discarded and replaced with the demo seed data.",
+        )}
+      </ConfirmModal>
     </>
   );
 }

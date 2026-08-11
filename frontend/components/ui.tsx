@@ -3,7 +3,7 @@
 /** ชิ้นส่วน UI พื้นฐานที่ทั้งแอปใช้ร่วมกัน — ไม่มี dependency นอกจาก Tailwind + lucide */
 
 import React, { useEffect, useRef } from "react";
-import { X } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import type { ResolutionStatus } from "@/lib/types";
 
 export function cn(...parts: Array<string | false | null | undefined>) {
@@ -259,6 +259,53 @@ export function Modal({
         {footer && <div className="flex justify-end gap-2 border-t border-line px-5 py-3.5">{footer}</div>}
       </div>
     </div>
+  );
+}
+
+/**
+ * กล่องยืนยันการทำลายข้อมูล
+ * ตั้งใจไม่ใช้ window.confirm() เพราะหน้าตาเป็นของเบราว์เซอร์ ไม่ใช่ของระบบ
+ * และอ่านยากกว่าเมื่อข้อความเป็นภาษาไทยยาว ๆ
+ */
+export function ConfirmModal({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  confirmLabel,
+  cancelLabel = "ยกเลิก",
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: string;
+  confirmLabel: string;
+  cancelLabel?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      width="max-w-md"
+      footer={
+        <>
+          <Button onClick={onClose}>{cancelLabel}</Button>
+          <Button variant="danger" onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--danger-bg)] text-[var(--danger)]">
+          <AlertTriangle size={16} />
+        </span>
+        <p className="text-[13.5px] leading-relaxed text-ink-2">{children}</p>
+      </div>
+    </Modal>
   );
 }
 

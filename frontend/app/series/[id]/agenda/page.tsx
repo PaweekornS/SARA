@@ -28,12 +28,14 @@ import { Badge, Button, Card, CardHead, EmptyState, Input, Textarea, cn } from "
 import { useT } from "@/lib/i18n";
 import * as api from "@/lib/api";
 import {
+  STATUS_LABEL_TH,
   addAgendaItem,
+  assigneeNames,
   editAgendaItem,
   formatThaiDate,
   moveAgendaItem,
-  removeAgendaItem,
   overdueDays,
+  removeAgendaItem,
   useApp,
 } from "@/lib/store";
 import { buildAgendaHtml, downloadDoc, toThaiNumeral } from "@/lib/export-doc";
@@ -267,16 +269,33 @@ function AgendaItemEditor({
           ) : (
             <>
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[13.5px] font-medium leading-snug text-ink">{item.title}</p>
+                <p className="line-clamp-1 text-[13.5px] font-medium leading-snug text-ink">{item.title}</p>
                 {od > 0 && (
                   <Badge tone="danger">
                     <AlertTriangle size={10} /> {t("overdueBy")} {od} {t("days")}
                   </Badge>
                 )}
-                {linked && linked.postpone_count >= 3 && <Badge tone="warn">⚑ {linked.postpone_count}</Badge>}
+                {linked && linked.postpone_count >= 3 && (
+                  <Badge tone="warn">
+                    ⚑ {t("postponedTimes")} {linked.postpone_count} {t("times")}
+                  </Badge>
+                )}
               </div>
-              {item.body && (
-                <p className="mt-1.5 whitespace-pre-line text-[12.5px] leading-relaxed text-ink-3">{item.body}</p>
+
+              {/* คอลัมน์ซ้ายบอกแค่ข้อมูลที่ใช้ "ตัดสินใจจัดวาระ" — เนื้อความเต็มอยู่ในหน้ากระดาษด้านขวาแล้ว
+                  ถ้าโชว์ซ้ำทั้งสองฝั่งจะอ่านไม่ออกว่าต้องมองอันไหน */}
+              {linked ? (
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
+                  <span>{assigneeNames(db, linked).map((p) => p.full_name).join(", ") || "-"}</span>
+                  {linked.due_date && (
+                    <span className={cn("tnum", od > 0 && "font-medium text-[var(--danger)]")}>
+                      {t("dueDate")} {formatThaiDate(linked.due_date, true)}
+                    </span>
+                  )}
+                  <span>{STATUS_LABEL_TH[linked.status]}</span>
+                </div>
+              ) : (
+                item.body && <p className="mt-1 line-clamp-2 text-[12px] leading-relaxed text-ink-3">{item.body}</p>
               )}
             </>
           )}
