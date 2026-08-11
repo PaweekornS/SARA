@@ -42,7 +42,7 @@ ASR_MODEL=ptm-asr-1
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your_email@gmail.com
-APP_SMTP_PASSWORD=your_app_specific_password_here
+SMTP_PASSWORD=your_app_specific_password_here
 ```
 
 ### Who Receives the Emails?
