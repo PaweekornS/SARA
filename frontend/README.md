@@ -1,36 +1,91 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SARA v2 — Frontend
 
-## Getting Started
+หน้าจอทั้งหมดของ **ระบบสารบรรณการประชุมอัตโนมัติ** สร้างตาม `business-docs/SARA_v2_Requirements.md`
 
-First, run the development server:
+แนวคิดที่ต่างจาก v1 อย่างสิ้นเชิง: **Resolution (มติ) เป็น entity แกนกลาง ไม่ใช่ Meeting**
+UI ทั้งหมดจึงจัดรอบ "ชุดการประชุม → มติ → วาระสืบเนื่อง" แทน "อัปโหลด → สรุป → ส่งเมล"
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev      # http://localhost:3000
+npm run check    # ตรวจตรรกะโดเมน (เกินกำหนด / closure rate / state machine / ค้นภาษาไทย)
+npm run build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## แผนผังหน้าจอ
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| เส้นทาง | โมดูลใน requirement | หน้าที่ |
+|---|---|---|
+| `/series` | M1 | ทะเบียนชุดการประชุม สร้าง/ลบ/กำหนดกรรมการประจำชุด |
+| `/series/[id]` | M6 | แดชบอร์ดมติ — ค้าง/เกินกำหนด/closure rate/ภาระต่อคน/เลื่อนซ้ำ |
+| `/series/[id]/resolutions` | M4, M6 | ทะเบียนมติ + ตัวกรอง + แผงไทม์ไลน์รายมติ |
+| `/series/[id]/meetings` | M2 | การประชุมในชุด + อัปโหลดครั้งใหม่ |
+| `/series/[id]/meetings/[mid]` | M2, M3, M4, M9 | หน้าตรวจทาน: pipeline, ข้อเสนอของระบบ, จับคู่ผู้พูด, transcript, รับรองรายงาน |
+| `/series/[id]/agenda` | M5 | ร่างระเบียบวาระครั้งถัดไป + ตัวอย่างเอกสาร + export |
+| `/series/[id]/ask` | M8 | ถาม-ตอบข้ามการประชุม พร้อมอ้างอิงและไทม์ไลน์ |
+| `/people` | M3 | ทะเบียนบุคคล + alias + ผู้รับผิดชอบที่เป็นหน่วยงาน |
+| `/actions` | M7 | คิวรออนุมัติก่อนส่ง + บันทึกการส่งออก |
+| `/audit` | M10 | บันทึกการใช้งาน |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## โครงไฟล์
 
-## Learn More
+```
+app/                    หน้าจอ (App Router · client components ทั้งหมดเพราะเป็นเครื่องมือทำงาน)
+components/
+  app-shell.tsx         แถบซ้าย + หัวเพจ
+  ui.tsx                ชิ้นส่วนพื้นฐาน (Button, Card, StatusPill, Modal, ...)
+  resolution-detail.tsx แผงรายละเอียดมติ + แก้ไข + เปลี่ยนสถานะ + แถวมติแบบย่อ
+  meeting-ingest.tsx    อัปโหลด + แสดง pipeline เป็นขั้น
+lib/
+  types.ts              โครงสร้างข้อมูลตรงกับ §5 ของ requirement แบบ 1:1
+  domain.ts             ตรรกะโดเมนล้วน ไม่มี React — เกินกำหนด, สถิติ, state machine, ค้นภาษาไทย
+  domain.test.ts        ชุดตรวจของ domain.ts (node --test)
+  store.ts              state กลาง (useSyncExternalStore) + mutation ทุกตัว + mock pipeline/linking engine
+  seed.ts               ข้อมูลเดโมตามสคริปต์ §11 (ครั้งที่ 5 มีมติ A/B/C · สคริปต์ครั้งที่ 6 รอประมวลผล)
+  api.ts                ★ จุดเดียวที่รู้ว่าข้อมูลมาจากไหน
+  export-doc.ts         สร้างไฟล์ .doc ที่เปิดแก้ต่อใน Word ได้
+  i18n.ts               ไทย/อังกฤษ (เนื้อหาเอกสารราชการคงเป็นไทยเสมอ)
+```
 
-To learn more about Next.js, take a look at the following resources:
+## การต่อ backend จริง
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+ตอนนี้ `NEXT_PUBLIC_USE_MOCK` ไม่ได้เป็น `"false"` → `lib/api.ts` เดินสาย mock ใน `lib/store.ts`
+ทุกฟังก์ชันใน `api.ts` map กับ endpoint ใน §6 ของ requirement แบบตรงตัวอยู่แล้ว
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+เมื่อ backend v2 พร้อม:
 
-## Deploy on Vercel
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8000/api
+NEXT_PUBLIC_USE_MOCK=false
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+แล้วแก้เฉพาะ `lib/api.ts` — **ไม่ต้องแตะหน้าจอสักหน้า**
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## สิ่งที่ยัง mock อยู่ (และของจริงต้องทำอะไรแทน)
+
+| ส่วน | ตอนนี้ | ของจริง |
+|---|---|---|
+| ASR + diarization | หน่วงเวลาแล้วใส่สคริปต์ครั้งที่ 6 จาก `seed.ts` | AI4Thai / WhisperX + pyannote ผ่าน Celery |
+| Cross-meeting linking | จับคู่ด้วยคำสำคัญใน `runExtraction()` | LLM + มติค้างของ series เป็น context (FR-M4-04, 05) |
+| Q&A | n-gram ระดับตัวอักษร (`domain.ts`) | ทะเบียนมติก่อน แล้ว fallback ไป pgvector |
+| Export .docx | HTML-for-Word ฝั่ง client | `python-docx` + ไฟล์ .docx ต้นแบบขององค์กร |
+| Auth / multi-tenancy | ยังไม่มี | M10 — จำเป็นก่อนใช้งานจริง ไม่มีข้อยกเว้น |
+
+## หลักการออกแบบที่บังคับใช้ในทุกหน้า
+
+1. **ระบบเสนอ คนตัดสิน** — สถานะมติไม่เปลี่ยนเองสักกรณี ยกเว้น `proposed → confirmed` ตอนรับรองรายงาน
+   (§4.2: false close อันตรายกว่า missed close หลายเท่า)
+2. **ทุกข้อความมีที่มา** — มติ ข้อเสนอ และคำตอบ Q&A ทุกชิ้นแนบข้อความคำต่อคำ + timestamp + ระดับความมั่นใจ
+3. **ไม่มีข้อมูลปลอมเมื่อระบบพัง** — ASR ล้มเหลว = หยุด pipeline และแจ้งตามจริง (ลองกดตัวเลือก "จำลอง ASR ล้มเหลว" ตอนอัปโหลด)
+4. **ไม่เดาชื่อคน** — ระบบไม่มั่นใจก็ถาม แล้วจำคำตอบเป็น alias ถาวร
+
+## เดโม 3 นาที
+
+1. `/series/ser-exec-2569` — ประธานเห็นภายใน 10 วินาทีว่าค้าง 5 เกินกำหนด 2 และใครค้าง
+2. `/series/ser-exec-2569/meetings` → อัปโหลดไฟล์เสียงครั้งที่ 6 → ดู pipeline เดินทีละขั้น
+3. หน้าตรวจทาน — ระบบจับได้ว่าประโยคหนึ่งในครั้งที่ 6 คือการรายงานผลของมติจากครั้งที่ 5 พร้อมหลักฐาน
+   และไม่มั่นใจว่า `SPEAKER_01` คือใคร แต่รู้ว่าในห้องเรียก "พี่หนึ่ง" ซึ่งเคยยืนยันแล้วว่าหมายถึงใคร
+4. กดยืนยันปิดมติ → รับรองรายงาน → `/agenda` กดสร้าง → **มติ A ที่ไม่มีใครพูดถึงเลยในครั้งที่ 6 ถูกยกขึ้นวาระที่ 3 เอง**
+5. ส่งออก `.docx` เปิดใน Word ได้ทันที
+
+> รีเซ็ตข้อมูลกลับไปจุดเริ่มต้นได้ตลอดจากปุ่มมุมล่างซ้าย
