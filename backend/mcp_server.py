@@ -4,16 +4,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import List, Optional
 from pydantic import BaseModel, EmailStr, Field
-from mcp.server.fastmcp import FastMCP, Context
+try:
+    from fastmcp import FastMCP, Context
+except ImportError:
+    from mcp.server.fastmcp import FastMCP, Context
 from jinja2 import Template
 
 # 1. Initialize FastMCP Server
-mcp = FastMCP(
-    "Corporate-Meeting-Email-Server",
-    host="0.0.0.0",
-    port=8001,
-    dependencies=["pydantic", "jinja2"]
-)
+mcp = FastMCP("Corporate-Meeting-Email-Server")
 
 # 2. Define Pydantic Schemas for Strict Input Validation
 class ActionItem(BaseModel):
@@ -89,10 +87,10 @@ def send_smtp_email(to_email: str, subject: str, html_content: str):
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASSWORD")
+    smtp_pass = os.getenv("APP_SMTP_PASSWORD")
 
     if not smtp_user or not smtp_pass:
-        raise ValueError("SMTP_USER and SMTP_PASSWORD environment variables are required.")
+        raise ValueError("SMTP_USER and APP_SMTP_PASSWORD environment variables are required.")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -151,4 +149,12 @@ async def send_meeting_summary_email(
 # 5. Entry Point: SSE / HTTP or Stdio Transport
 if __name__ == "__main__":
     # Runs the MCP server with HTTP/SSE transport on port 8001
-    mcp.run(transport="sse")
+    os.environ.setdefault("FASTMCP_HOST", "0.0.0.0")
+    os.environ.setdefault("FASTMCP_PORT", "8001")
+    if hasattr(mcp, "settings"):
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = 8001
+    try:
+        mcp.run(transport="sse", host="0.0.0.0", port=8001)
+    except TypeError:
+        mcp.run(transport="sse")

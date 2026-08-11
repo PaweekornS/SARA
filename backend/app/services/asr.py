@@ -7,10 +7,10 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Re-use the OpenRouter base URL & key
+# Initialize client for AI4Thai ASR Service (OpenAI-compatible)
 client = OpenAI(
-    base_url=settings.OPENROUTER_BASE_URL,
-    api_key=settings.OPENROUTER_API_KEY,
+    base_url=f"{settings.ASR_URL.rstrip('/')}/v1",
+    api_key=settings.APP_AI4THAI_API_KEY,
 )
 
 # Size limit set to 24 MB to have a safety margin under the 25 MB limit
@@ -18,7 +18,7 @@ MAX_FILE_SIZE = 24 * 1024 * 1024
 
 def transcribe_audio(file_path: str) -> str:
     """
-    Transcribes audio files using OpenRouter's Speech-to-Text models.
+    Transcribes audio files using AI4Thai's ASR service.
     Supports large files by chunking them with ffmpeg if they exceed 24MB.
     """
     if not os.path.exists(file_path):
@@ -66,17 +66,19 @@ def transcribe_audio(file_path: str) -> str:
         return full_transcript
 
     except Exception as err:
-        logger.error(f"OpenRouter ASR failed: {err}")
+        logger.error(f"AI4Thai ASR failed: {err}")
         return get_mock_transcript()
 
 def _transcribe_single_file(file_path: str) -> str:
     """
-    Performs standard OpenAI/Whisper transcription on a single file.
+    Performs transcription using the AI4Thai ASR API on a single file.
     """
     with open(file_path, "rb") as audio_file:
         transcript_response = client.audio.transcriptions.create(
-            model="openai/whisper-large-v3-turbo",  # Fast and cost-effective ASR model
+            model=settings.ASR_MODEL,
             file=audio_file,
+            language="th",
+            response_format="json"
         )
     return transcript_response.text
 
@@ -123,6 +125,6 @@ def get_mock_transcript() -> str:
     """
     return (
         "Somchai [00:00]: Meeting started.\n"
-        "Jane [00:15]: On the backend, OpenRouter integration is complete.\n"
+        "Jane [00:15]: On the backend, AI4Thai API integration is complete.\n"
         "Somchai [00:30]: Great, let's ship the MVP demo."
     )

@@ -11,8 +11,8 @@ graph TD
     API -->|3. Queue Job| Redis[(Redis Broker)]
     Redis -->|4. Pick Up Job| Worker[Celery Background Worker]
     Worker -->|5. Read Audio| SharedTmp
-    Worker -->|6. Speech-to-Text| OpenRouterASR[OpenRouter Whisper ASR]
-    Worker -->|7. Structured Summarization| OpenRouterLLM[OpenRouter Qwen LLM]
+    Worker -->|6. Speech-to-Text| AI4ThaiASR[AI4Thai Whisper ASR]
+    Worker -->|7. Structured Summarization| AI4ThaiLLM[AI4Thai Pathumma LLM]
     Worker -->|8. Dispatch Action Items| MCPAgent[MCP SSE Client]
     MCPAgent -->|9. Trigger Email Tool| MCPServer[MCP Server]
     MCPServer -->|10. Send HTML Email| SMTP[SMTP Server]
@@ -32,15 +32,17 @@ Set the following variables:
 # Database Connection (used by FastAPI and SQLAlchemy)
 DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
 
-# OpenRouter Credentials (used for ASR transcription and Qwen summarization)
-# Get a key at: https://openrouter.ai/
-OPENROUTER_API_KEY=your_openrouter_api_key_here
+# AI4Thai / Pathumma API Config
+# Get a key at: https://tokenmind.pathumma.in.th
+APP_AI4THAI_API_KEY=your_ai4thai_api_key_here
+ASR_URL=https://tokenmind.pathumma.in.th
+ASR_MODEL=ptm-asr-1
 
 # SMTP Credentials (sender details for sending action-item emails)
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your_email@gmail.com
-SMTP_PASSWORD=your_app_specific_password_here
+APP_SMTP_PASSWORD=your_app_specific_password_here
 ```
 
 ### Who Receives the Emails?
