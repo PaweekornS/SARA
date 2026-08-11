@@ -133,9 +133,15 @@ export default function MeetingReviewPage() {
           <>
             <Button
               icon={<Download size={15} />}
-              onClick={() =>
-                downloadDoc(`รายงานการประชุมครั้งที่-${meeting.sequence_no}-${meeting.fiscal_year}`, buildMinutesHtml(db, meeting))
-              }
+              onClick={() => {
+                const url = api.minutesExportUrl(meeting.id);
+                if (url) window.open(url, "_blank");
+                else
+                  downloadDoc(
+                    `รายงานการประชุมครั้งที่-${meeting.sequence_no}-${meeting.fiscal_year}`,
+                    buildMinutesHtml(db, meeting),
+                  );
+              }}
               disabled={processing || failed}
             >
               {t.pick("รายงานการประชุม .docx", "Minutes .docx")}

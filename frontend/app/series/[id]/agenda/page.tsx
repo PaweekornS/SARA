@@ -89,9 +89,17 @@ export default function AgendaPage() {
                 <Button
                   variant="seal"
                   icon={<Download size={15} />}
-                  onClick={() =>
-                    downloadDoc(`ระเบียบวาระครั้งที่-${draft.target_sequence_no}-${series?.fiscal_year}`, buildAgendaHtml(db, draft))
-                  }
+                  onClick={() => {
+                    /* โหมดต่อ backend จริงให้ python-docx เรนเดอร์ตาม template ขององค์กร
+                       โหมด mock สร้างไฟล์ในเครื่องเพื่อให้เปิดดูได้โดยไม่ต้องมี server */
+                    const url = api.agendaExportUrl(draft.id);
+                    if (url) window.open(url, "_blank");
+                    else
+                      downloadDoc(
+                        `ระเบียบวาระครั้งที่-${draft.target_sequence_no}-${series?.fiscal_year}`,
+                        buildAgendaHtml(db, draft),
+                      );
+                  }}
                 >
                   {t("exportDocx")}
                 </Button>

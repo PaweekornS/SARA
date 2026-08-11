@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  AlertTriangle,
   BadgeCheck,
   CalendarClock,
   ChevronDown,
@@ -22,7 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useT } from "@/lib/i18n";
-import { hydrate, resetDemo, setLang, toggleTheme, useApp } from "@/lib/store";
+import { LIVE, hydrate, loadFromServer, resetDemo, setError, setLang, toggleTheme, useApp } from "@/lib/store";
 import { ConfirmModal, cn } from "./ui";
 
 /* ── โครงหน้า: แถบซ้าย + เนื้อหา ─────────────────────────────────────── */
@@ -43,8 +44,46 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Menu size={18} />
           SARA
         </button>
+        <ConnectionBanner />
         <main className="min-w-0 flex-1">{children}</main>
       </div>
+    </div>
+  );
+}
+
+/** ความล้มเหลวของการซิงก์ต้องไม่เงียบ ไม่งั้นผู้ใช้จะคิดว่าบันทึกแล้วทั้งที่ยังไม่ได้บันทึก */
+function ConnectionBanner() {
+  const t = useT();
+  const { lastError, loading } = useApp();
+
+  if (!LIVE || (!lastError && !loading)) return null;
+
+  return (
+    <div
+      className={cn(
+        "no-print flex flex-wrap items-center gap-3 border-b px-5 py-2.5 text-[13px]",
+        lastError
+          ? "border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[var(--danger-bg)] text-[var(--danger)]"
+          : "border-line bg-surface-2 text-ink-3",
+      )}
+    >
+      {lastError ? (
+        <>
+          <AlertTriangle size={15} className="shrink-0" />
+          <span className="min-w-0 flex-1">{lastError}</span>
+          <button
+            onClick={() => {
+              setError(null);
+              void loadFromServer();
+            }}
+            className="rounded border border-current px-2.5 py-1 text-[12px] font-medium cursor-pointer"
+          >
+            {t.pick("ลองใหม่", "Retry")}
+          </button>
+        </>
+      ) : (
+        <span>{t.pick("กำลังซิงก์ข้อมูลกับเซิร์ฟเวอร์…", "Syncing…")}</span>
+      )}
     </div>
   );
 }

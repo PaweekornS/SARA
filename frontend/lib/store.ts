@@ -9,6 +9,7 @@
  */
 
 import { useSyncExternalStore } from "react";
+import * as http from "./http";
 import {
   LINK_LABEL_TH,
   OPEN_STATUSES,
@@ -52,6 +53,9 @@ export interface AppState {
   theme: Theme;
   /** ผู้ใช้ที่ล็อกอินอยู่ (mock) — ใช้เป็น actor ใน audit log */
   actor: string;
+  /** สถานะการซิงก์กับ backend — ใช้เฉพาะตอน NEXT_PUBLIC_USE_MOCK=false */
+  loading: boolean;
+  lastError: string | null;
 }
 
 const STORAGE_KEY = "sara_v2_state";
@@ -62,6 +66,8 @@ function freshState(): AppState {
     lang: "th",
     theme: "light",
     actor: "นางสาวปรียานุช วัฒนสิน",
+    loading: false,
+    lastError: null,
   };
 }
 
@@ -100,6 +106,14 @@ function mutate(updater: (db: Database) => Database) {
 export function hydrate() {
   if (hydrated || typeof window === "undefined") return;
   hydrated = true;
+
+  if (LIVE) {
+    /* ต่อ backend จริง — ข้อมูลมาจากฐานเสมอ ไม่อ่านของเก่าใน localStorage */
+    applyTheme(state.theme);
+    void loadFromServer();
+    return;
+  }
+
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -145,6 +159,46 @@ export function useApp(): AppState {
 
 export function getState() {
   return state;
+}
+
+/* ── การซิงก์กับ backend ─────────────────────────────────────────────── */
+
+export const LIVE = !http.USE_MOCK;
+
+export function setError(message: string | null) {
+  set((s) => ({ ...s, lastError: message }));
+}
+
+/** ดึงข้อมูลทั้งก้อนจาก /bootstrap มาแทนที่ของเดิม */
+export async function loadFromServer(): Promise<void> {
+  if (!LIVE) return;
+  set((s) => ({ ...s, loading: true }));
+  try {
+    const db = await http.fetchBootstrap();
+    set((s) => ({ ...s, db, loading: false, lastError: null }));
+  } catch (err) {
+    set((s) => ({
+      ...s,
+      loading: false,
+      lastError: `เชื่อมต่อ backend ไม่ได้: ${err instanceof Error ? err.message : String(err)}`,
+    }));
+  }
+}
+
+/**
+ * ส่งการเปลี่ยนแปลงขึ้น server แล้วดึงข้อมูลจริงกลับมาทับ
+ *
+ * หน้าจออัปเดตทันทีจาก mutation ในเครื่อง (optimistic) แล้วค่อยถูกแทนที่ด้วยของจริง
+ * ถ้า server ปฏิเสธ ผู้ใช้จะเห็นข้อความจริงจาก backend และข้อมูลถูกดึงกลับมาให้ตรงกับฐาน
+ */
+function sync(run: () => Promise<unknown>): void {
+  if (!LIVE) return;
+  run()
+    .then(() => loadFromServer())
+    .catch(async (err) => {
+      setError(err instanceof Error ? err.message : String(err));
+      await loadFromServer();
+    });
 }
 
 /* ── preferences ─────────────────────────────────────────────────────── */
@@ -208,6 +262,7 @@ export function createSeries(input: Omit<MeetingSeries, "id" | "org_id">) {
       input.name,
     ),
   );
+  sync(() => http.createSeries({ ...input }, state.actor));
   return id;
 }
 
@@ -216,6 +271,7 @@ export function updateSeries(id: Uuid, patch: Partial<MeetingSeries>) {
     ...db,
     series: db.series.map((s) => (s.id === id ? { ...s, ...patch } : s)),
   }));
+  sync(() => http.updateSeries(id, patch, state.actor));
 }
 
 export function deleteSeries(id: Uuid) {
@@ -225,6 +281,7 @@ export function deleteSeries(id: Uuid) {
     meetings: db.meetings.filter((m) => m.series_id !== id),
     resolutions: db.resolutions.filter((r) => r.series_id !== id),
   }));
+  sync(() => http.deleteSeries(id, state.actor));
 }
 
 /* ── M2 · Ingestion & pipeline ───────────────────────────────────────── */
@@ -281,6 +338,42 @@ export function uploadMeeting(input: UploadInput): Uuid {
   return id;
 }
 
+/**
+ * โหมดต่อ backend จริง — สร้าง meeting แล้วอัปโหลดไฟล์เข้าคิวประมวลผล
+ * คืน id ที่ backend สร้างให้ (คนละตัวกับ id ของ mock) แล้ว poll สถานะจนกว่างานจะจบ
+ */
+export async function uploadMeetingLive(input: UploadInput & { file?: File }): Promise<Uuid> {
+  const id = await http.uploadMeeting(
+    {
+      series_id: input.series_id,
+      sequence_no: input.sequence_no,
+      meeting_date: input.meeting_date,
+      source_kind: input.source_kind,
+      simulate_asr_failure: input.simulate_asr_failure,
+      file: input.file,
+    },
+    state.actor,
+  );
+  await loadFromServer();
+  pollMeeting(id);
+  return id;
+}
+
+/** ระหว่างประมวลผล ให้ดึงสถานะมาอัปเดตหน้าจอทุก 3 วินาทีจนกว่าจะเสร็จหรือพัง */
+function pollMeeting(meetingId: Uuid): void {
+  const timer = setInterval(async () => {
+    try {
+      const { status } = await http.meetingStatus(meetingId);
+      await loadFromServer();
+      if (status !== "processing") clearInterval(timer);
+    } catch {
+      clearInterval(timer);
+    }
+  }, 3000);
+  //  กันลูปค้างถ้า worker ตายกลางทาง
+  setTimeout(() => clearInterval(timer), 10 * 60 * 1000);
+}
+
 /** FR-M2-05 retry ด้วยมือ */
 export function retryMeeting(meetingId: Uuid) {
   mutate((db) => ({
@@ -289,6 +382,10 @@ export function retryMeeting(meetingId: Uuid) {
       m.id === meetingId ? { ...m, status: "processing", pipeline: emptyPipeline() } : m,
     ),
   }));
+  if (LIVE) {
+    sync(() => http.retryMeeting(meetingId, state.actor));
+    return;
+  }
   runPipeline(meetingId, false);
 }
 
@@ -521,6 +618,8 @@ export function upsertPerson(person: Partial<Person> & { id?: Uuid }) {
     };
     return audit({ ...db, people: [...db.people, created] }, "create_person", "person", id, created.full_name);
   });
+  const { id: personId, ...rest } = person;
+  sync(() => http.upsertPerson(rest, personId, state.actor));
 }
 
 export function deletePerson(id: Uuid) {
@@ -529,6 +628,7 @@ export function deletePerson(id: Uuid) {
     people: db.people.filter((p) => p.id !== id),
     aliases: db.aliases.filter((a) => a.person_id !== id),
   }));
+  sync(() => http.deletePerson(id, state.actor));
 }
 
 /** FR-M3-04 ยืนยันครั้งแรก → จำถาวร */
@@ -551,20 +651,28 @@ export function addAlias(person_id: Uuid, alias: string, source: "manual" | "con
           alias,
         ),
   );
+  sync(() => http.addAlias(person_id, alias.trim(), state.actor));
 }
 
 export function removeAlias(id: Uuid) {
   mutate((db) => ({ ...db, aliases: db.aliases.filter((a) => a.id !== id) }));
+  sync(() => http.removeAlias(id, state.actor));
 }
 
 /** PATCH /meetings/{id}/speakers */
-export function assignSpeaker(meetingId: Uuid, speaker_label: string, person_id: Uuid | null) {
+export function assignSpeaker(
+  meetingId: Uuid,
+  speaker_label: string,
+  person_id: Uuid | null,
+  save_alias?: string,
+) {
   mutate((db) => ({
     ...db,
     segments: db.segments.map((s) =>
       s.meeting_id === meetingId && s.speaker_label === speaker_label ? { ...s, person_id } : s,
     ),
   }));
+  sync(() => http.assignSpeaker(meetingId, speaker_label, person_id, save_alias, state.actor));
 }
 
 /* ── M4 · Resolution lifecycle ───────────────────────────────────────── */
@@ -645,6 +753,7 @@ export function changeResolutionStatus(
       `${target.status} → ${status}`,
     );
   });
+  sync(() => http.setResolutionStatus(id, status, reason, opts.meeting_id ?? null, state.actor));
 }
 
 /** PATCH /resolutions/{id} — เก็บประวัติทุกฟิลด์ที่แก้ (FR-M4-08) */
@@ -688,6 +797,18 @@ export function updateResolution(id: Uuid, patch: Partial<Resolution>, reason = 
       ],
     };
   });
+  sync(() =>
+    http.patchResolution(
+      id,
+      {
+        ...(patch.text !== undefined ? { text: patch.text } : {}),
+        ...(patch.due_date !== undefined ? { due_date: patch.due_date } : {}),
+        ...(patch.assignee_ids !== undefined ? { assignee_ids: patch.assignee_ids } : {}),
+        reason,
+      },
+      state.actor,
+    ),
+  );
 }
 
 /** FR-M4-07 มติใหม่แทนมติเก่า */
@@ -728,6 +849,7 @@ export function decideProposal(
       ...db,
       proposals: db.proposals.map((p) => (p.id === proposalId ? { ...p, decision } : p)),
     }));
+    sync(() => http.decideProposal(proposal.meeting_id, proposalId, { decision }, state.actor));
     return;
   }
 
@@ -799,6 +921,22 @@ export function decideProposal(
     ...db,
     proposals: db.proposals.map((p) => (p.id === proposalId ? { ...p, decision } : p)),
   }));
+
+  sync(() =>
+    http.decideProposal(
+      proposal.meeting_id,
+      proposalId,
+      {
+        decision,
+        text: overrides.text,
+        assignee_ids: overrides.assignee_ids,
+        due_date: overrides.due_date,
+        person_id: overrides.person_id,
+        save_alias: overrides.save_alias,
+      },
+      state.actor,
+    ),
+  );
 }
 
 export function setMeetingStatus(meetingId: Uuid, status: Meeting["status"]) {
@@ -832,6 +970,7 @@ export function setMeetingStatus(meetingId: Uuid, status: Meeting["status"]) {
       status,
     ),
   );
+  if (status === "approved") sync(() => http.approveMeeting(meetingId, state.actor));
 }
 
 /* ── M5 · Agenda generation ──────────────────────────────────────────── */
@@ -905,6 +1044,7 @@ export function generateAgenda(series_id: Uuid): Uuid {
     items,
   };
   mutate((db2) => audit({ ...db2, agendas: [draft, ...db2.agendas.filter((a) => a.series_id !== series_id)] }, "generate_agenda", "agenda_draft", draftId, `ครั้งที่ ${lastSeq + 1}/2569`));
+  sync(() => http.generateAgenda(series_id, state.actor));
   return draftId;
 }
 
@@ -913,6 +1053,7 @@ export function updateAgendaItems(draftId: Uuid, items: AgendaItem[]) {
     ...db,
     agendas: db.agendas.map((a) => (a.id === draftId ? { ...a, items } : a)),
   }));
+  sync(() => http.patchAgendaItems(draftId, items, state.actor));
 }
 
 export function moveAgendaItem(draftId: Uuid, itemId: Uuid, dir: -1 | 1) {
@@ -988,6 +1129,7 @@ export function approveAction(id: Uuid) {
       "อนุมัติและส่งออก",
     ),
   );
+  sync(() => http.approveAction(id, state.actor));
 }
 
 export function cancelAction(id: Uuid) {
@@ -995,6 +1137,7 @@ export function cancelAction(id: Uuid) {
     ...db,
     actions: db.actions.map((a) => (a.id === id ? { ...a, status: "cancelled" } : a)),
   }));
+  sync(() => http.cancelAction(id, state.actor));
 }
 
 /* ── M8 · Cross-meeting Q&A (mock retrieval) ─────────────────────────── */
@@ -1082,6 +1225,14 @@ export function askSeries(series_id: Uuid, question: string): QaAnswer {
     qa: { ...db2.qa, [series_id]: [...(db2.qa[series_id] ?? []), answer] },
   }));
   return answer;
+}
+
+/** เก็บคำตอบที่ได้จาก backend ลง state เพื่อให้หน้าถาม-ตอบแสดงประวัติได้เหมือนกัน */
+export function appendQa(series_id: Uuid, answer: QaAnswer) {
+  mutate((db) => ({
+    ...db,
+    qa: { ...db.qa, [series_id]: [...(db.qa[series_id] ?? []), answer] },
+  }));
 }
 
 export function clearQa(series_id: Uuid) {

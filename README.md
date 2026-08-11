@@ -1,133 +1,91 @@
-# SARA - Smart Autonomous Record Agent
+# SARA v2 — ระบบสารบรรณการประชุมอัตโนมัติ
 
-SARA is an automated meeting transcription, summarization, and action-item dispatcher system. It ingests meeting audio files, transcribes them, extracts structured executive summaries and action items, and automatically sends formatted HTML summary emails to task assignees using a Model Context Protocol (MCP) server.
+แปลงไฟล์เสียงประชุมเป็นรายงานการประชุมตามระเบียบสารบรรณ และ **ติดตามมติทุกข้อข้ามการประชุมจนกว่าจะปิดจ๊อบ**
 
-## Architecture Flow
+v1 = อัดเสียง → สรุป → ยิงเมล → จบ
+v2 = **Resolution (มติ) เป็น entity แกนกลาง** ที่มีวงจรชีวิตของตัวเองและอายุยืนกว่าการประชุมที่ให้กำเนิดมัน
+
+รายละเอียดข้อกำหนดทั้งหมดอยู่ใน `business-docs/SARA_v2_Requirements.md`
+
+---
+
+## เริ่มใช้งานใน 3 คำสั่ง
+
+```bash
+cp .env.example .env        # ใส่ APP_AI4THAI_API_KEY และ SMTP ของจริง
+docker compose up -d --build
+# เปิด http://localhost:3000
+```
+
+`docker compose` จะรัน migration + สร้างข้อมูลตั้งต้นให้อัตโนมัติ (service `migrate`)
+
+| บริการ | พอร์ต | หน้าที่ |
+|---|---|---|
+| frontend | 3000 | หน้าจอทั้งหมด (Next.js) |
+| backend | 8000 | REST API · เอกสาร OpenAPI ที่ `/api/docs` |
+| mcp_server | 8001 | ชั้น action — ทุกอีเมลออกทางนี้ทางเดียว |
+| celery_worker | — | ถอดเสียง สกัดมติ จับคู่ข้ามการประชุม ส่งอีเมล |
+| celery_beat | — | สแกนมติใกล้ครบกำหนดทุกเช้า สร้างรายการเตือนเข้าคิวรออนุมัติ |
+| db · redis | 5432 · 6379 | PostgreSQL · คิวงาน |
+
+> ถ้าเครื่องมี PostgreSQL ของตัวเองอยู่แล้ว พอร์ต 5432 จะชนกัน — แก้ port mapping ใน `docker-compose.yaml` เป็น `5433:5432`
+
+---
+
+## สถาปัตยกรรม
 
 ```mermaid
 graph TD
-    Client[Client / UI] -->|1. Upload Audio| API[FastAPI Web Server]
-    API -->|2. Save Raw File| SharedTmp[(Shared Volume /tmp)]
-    API -->|3. Queue Job| Redis[(Redis Broker)]
-    Redis -->|4. Pick Up Job| Worker[Celery Background Worker]
-    Worker -->|5. Read Audio| SharedTmp
-    Worker -->|6. Speech-to-Text| AI4ThaiASR[AI4Thai Whisper ASR]
-    Worker -->|7. Structured Summarization| AI4ThaiLLM[AI4Thai Pathumma LLM]
-    Worker -->|8. Dispatch Action Items| MCPAgent[MCP SSE Client]
-    MCPAgent -->|9. Trigger Email Tool| MCPServer[MCP Server]
-    MCPServer -->|10. Send HTML Email| SMTP[SMTP Server]
+    UI[Next.js · หน้าตรวจทาน/แดชบอร์ด] -->|1. อัปโหลดไฟล์เสียง| API[FastAPI]
+    API -->|2. เก็บไฟล์| Storage[(Volume / object storage)]
+    API -->|3. เข้าคิว| Redis[(Redis)]
+    Redis -->|4. รับงาน| Worker[Celery worker]
+    Worker -->|5. ถอดเสียง| ASR[AI4Thai ASR]
+    Worker -->|6. สกัดมติ + จับคู่มติค้างของ series| LLM[AI4Thai Pathumma]
+    Worker -->|7. บันทึกเป็น Proposal ที่ยังไม่มีผล| DB[(PostgreSQL)]
+    UI -->|8. คนกดยืนยันทีละรายการ| API
+    API -->|9. มติเปลี่ยนสถานะจริง + เก็บหลักฐาน| DB
+    Beat[Celery beat] -->|10. เตือนก่อนครบกำหนด| DB
+    UI -->|11. อนุมัติก่อนส่ง| MCP[MCP server]
+    MCP -->|12. ส่งอีเมลรายบุคคล| SMTP[SMTP]
+```
+
+**จุดที่ต่างจากระบบสรุปประชุมทั่วไป:** ขั้นที่ 7–9 ระบบ *เสนอ* ได้อย่างเดียว มติไม่เปลี่ยนสถานะจนกว่าคนจะกดยืนยัน
+
+---
+
+## หลักการที่บังคับใช้ในโค้ด ไม่ใช่แค่ในเอกสาร
+
+| หลักการ | บังคับที่ไหน |
+|---|---|
+| ASR ล้มเหลว = หยุด pipeline ไม่สร้างข้อมูลปลอม (FR-M2-04) | `app/services/asr.py` โยน `AsrError` · `app/workers/tasks.py` ตั้งสถานะ failed |
+| ระบบปิดมติเองไม่ได้ (FR-M4-06 · §4.2) | `change_status(system_initiated=True)` ปฏิเสธ done/cancelled |
+| ปิดมติต้องมีเหตุผลเสมอ | `app/services/resolutions.py` คืน 422 ถ้าเหตุผลว่าง |
+| เปลี่ยนสถานะข้ามขั้นไม่ได้ | `ResolutionStatus.TRANSITIONS` ตาม §4.1 |
+| ไม่เดาชื่อคนไทย (§12) | `extraction.resolve_person` คืน None เมื่อชื่อชนกัน แล้วสร้างข้อเสนอถามคนแทน |
+| ข้อเสนอปิดมติที่ไม่มั่นใจถูกลดชั้น | `CLOSE_CONFIDENCE_FLOOR` ใน `extraction.py` |
+| ห้ามสร้างวาระจากรายงานที่ยังไม่รับรอง (FR-M9-04) | `POST /series/{id}/agenda/generate` คืน 409 |
+| ทุกอีเมลต้องผ่านการอนุมัติ (FR-M7-07) | `outbound_action.status` เริ่มที่ `pending_approval` เสมอ |
+
+---
+
+## ตรวจสอบก่อนส่งงาน
+
+```bash
+cd backend  && python -m unittest discover -s tests   # 24 เคส
+cd frontend && npm run check && npm run lint && npm run build
 ```
 
 ---
 
-## Configuration (`.env`)
+## สิ่งที่ยังไม่ได้ทำ (พูดตามตรง)
 
-Before running the application, configure your credentials in a `.env` file at the project root. You can copy the example file:
-```bash
-cp .env.example .env
-```
+| เรื่อง | สถานะ |
+|---|---|
+| **Auth / multi-tenancy (M10)** | ยังไม่มี — ผู้กระทำมาจากหัวข้อ `X-Actor` ซึ่งปลอมได้ **ต้องทำก่อนใช้งานจริง** |
+| **Speaker diarization (FR-M2-06)** | ใช้ speaker label จาก ASR ถ้ามี ถ้าไม่มีให้เลขาฯ ระบุเองในหน้าตรวจทาน (fallback ที่ §M2 อนุญาต) ยังไม่ได้ต่อ pyannote |
+| **Q&A แบบ semantic (§14 ข้อ 3)** | ใช้ n-gram ระดับตัวอักษร ยังไม่ได้ใช้ pgvector |
+| **template .docx ขององค์กร** | รองรับผ่าน `AGENDA_TEMPLATE_PATH` / `MINUTES_TEMPLATE_PATH` แต่ยังไม่มีไฟล์ต้นแบบจริง |
+| **create_jira_issue (FR-M7-05)** | เป็น stub ที่บอกตามตรงว่ายังไม่ได้ต่อระบบจริง |
+| **วัดผลตาม §10** | ยังไม่ได้ทำ eval set 20 ไฟล์ ตัวเลข F1 / false close rate จึงยังเคลมไม่ได้ |
 
-Set the following variables:
-```ini
-# Database Connection (used by FastAPI and SQLAlchemy)
-DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
-
-# AI4Thai / Pathumma API Config
-# Get a key at: https://tokenmind.pathumma.in.th
-APP_AI4THAI_API_KEY=your_ai4thai_api_key_here
-ASR_URL=https://tokenmind.pathumma.in.th
-ASR_MODEL=ptm-asr-1
-
-# SMTP Credentials (sender details for sending action-item emails)
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASSWORD=your_app_specific_password_here
-```
-
-### Who Receives the Emails?
-The email recipients are dynamically determined by the AI summarizer based on the meeting transcript.
-- During the meeting, if a speaker assigns a task to someone and mentions their email (e.g., *"Jane will write the docs, send it to jane@example.com"*), the Qwen LLM automatically extracts the task details and the email address.
-- The Celery worker then invokes the MCP tool `send_meeting_summary_email` with these extracted emails, sending a custom summary table and list of action items directly to each recipient automatically.
-
----
-
-## Running with Docker (Recommended)
-
-Docker Compose manages PostgreSQL, Redis, FastAPI, Celery, and the MCP Server.
-
-### 1. Build and Start Services
-Run the following command to build the image and start all containers in the background:
-```bash
-docker compose up --build -d
-```
-
-### 2. View Service Logs
-```bash
-docker compose logs -f
-```
-
-### 3. Stop Services
-```bash
-docker compose down
-```
-
----
-
-## Running Locally
-
-To run the stack locally for development purposes, ensure you have **Python 3.11+**, **PostgreSQL**, **Redis**, and **ffmpeg** installed on your host system.
-
-### 1. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Run Redis & PostgreSQL
-Ensure your local Redis server is running on port `6379` and PostgreSQL is running on port `5432` with credentials matching your `.env` configuration.
-
-### 3. Run the Services (Separate Terminals)
-
-#### Run the MCP Server
-The MCP server hosts the SMTP email dispatcher tool:
-```bash
-python mcp_server.py
-```
-
-#### Run the Celery Background Worker
-The worker processes audio file segmenting, transcription calls, summarization, and email agent invocation:
-```bash
-celery -A app.workers.tasks.celery_app worker --loglevel=info
-```
-
-#### Run the FastAPI Web Server
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
----
-
-## Usage Guide
-
-1. **Submit a Meeting Audio**:
-   Send a POST request to `/api/meetings/process` containing your `.mp3` or `.wav` audio file:
-   ```bash
-   curl -X POST "http://localhost:8000/api/meetings/process" -F "file=@sample_meeting.mp3"
-   ```
-   *Response:*
-   ```json
-   {
-     "meeting_id": "b307d645-97c7-4319-806f-f7ddf662f308",
-     "status": "QUEUED",
-     "message": "Meeting successfully submitted for processing."
-   }
-   ```
-
-2. **Check Process Status**:
-   Poll the status of your meeting using the returned `meeting_id`:
-   ```bash
-   curl -X GET "http://localhost:8000/api/meetings/b307d645-97c7-4319-806f-f7ddf662f308/status"
-   ```
-
-3. **Check Recipient Inbox**:
-   Once status is marked as `COMPLETED`, check the inbox of the email addresses mentioned in your audio. They will have received an HTML email summary with formatted action items.

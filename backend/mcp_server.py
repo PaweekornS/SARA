@@ -1,160 +1,156 @@
+"""
+MCP server — ชั้น action ของ SARA (M7)
+
+ทุกอย่างที่ระบบ "ส่งออกไปข้างนอก" ต้องผ่านที่นี่ที่เดียว
+ทำให้สลับปลายทางได้ (อีเมล → ระบบติดตามงาน) โดยไม่ต้องแตะ pipeline
+
+⚠ server นี้ไม่ตัดสินใจเองว่าจะส่งอะไรถึงใคร
+   มันเป็นแค่ปลายทางที่ทำตามคำสั่งซึ่งผ่านการอนุมัติจากคนมาแล้วเท่านั้น (FR-M7-07)
+"""
+
+from __future__ import annotations
+
 import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import List, Optional
-from pydantic import BaseModel, EmailStr, Field
-try:
-    from fastmcp import FastMCP, Context
-except ImportError:
-    from mcp.server.fastmcp import FastMCP, Context
+
 from jinja2 import Template
 
-# 1. Initialize FastMCP Server
-mcp = FastMCP("Corporate-Meeting-Email-Server")
+try:
+    from fastmcp import Context, FastMCP
+except ImportError:  # pragma: no cover
+    from mcp.server.fastmcp import Context, FastMCP
 
-# 2. Define Pydantic Schemas for Strict Input Validation
-class ActionItem(BaseModel):
-    task: str = Field(..., description="Description of the assigned action item or task")
-    assignee: str = Field(..., description="Name of the person responsible")
-    email: EmailStr = Field(..., description="Recipient's email address")
-    due_date: Optional[str] = Field(None, description="Due date in YYYY-MM-DD format")
+mcp = FastMCP("SARA-Action-Server")
 
-class EmailPayload(BaseModel):
-    subject: str = Field(..., description="Subject line for the meeting summary email")
-    summary_bullets: List[str] = Field(..., description="List of key executive summary points")
-    action_items: List[ActionItem] = Field(..., description="List of extracted action items and owners")
-
-# 3. HTML Email Template (Rendered with Jinja2)
-HTML_EMAIL_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
-        .header { background-color: #2563eb; color: white; padding: 20px; border-radius: 8px 8px 0 0; }
-        .section { padding: 20px; border: 1px solid #e5e7eb; border-top: none; }
-        .summary-box { background-color: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 16px; margin-bottom: 20px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #f1f5f9; }
-        .footer { text-align: center; font-size: 12px; color: #6b7280; margin-top: 20px; }
-    </style>
-</head>
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="th">
+<head><meta charset="utf-8"/>
+<style>
+  body { font-family: "IBM Plex Sans Thai", "Sarabun", Tahoma, sans-serif; line-height: 1.7;
+         color: #131a26; max-width: 640px; margin: 0 auto; padding: 24px; }
+  .seal { width: 40px; height: 40px; border-radius: 50%; background: #1e3a6e; color: #fff;
+          display: inline-flex; align-items: center; justify-content: center; font-weight: 700; }
+  h2 { font-size: 18px; margin: 16px 0 4px; }
+  .quote { border-left: 3px solid #9a7517; background: #fbf3df; padding: 12px 16px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #dfe3ea; vertical-align: top; }
+  th { background: #eef0f4; }
+  .overdue { color: #b3261e; font-weight: 600; }
+  .footer { margin-top: 28px; font-size: 12px; color: #6b7688; border-top: 1px solid #dfe3ea; padding-top: 12px; }
+</style></head>
 <body>
-    <div class="header">
-        <h2 style="margin:0;">{{ subject }}</h2>
-    </div>
-    <div class="section">
-        <h3>📋 Executive Summary</h3>
-        <div class="summary-box">
-            <ul>
-            {% for bullet in summary_bullets %}
-                <li>{{ bullet }}</li>
-            {% endfor %}
-            </ul>
-        </div>
-
-        <h3>⚡ Your Assigned Action Items</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>Task</th>
-                    <th>Assignee</th>
-                    <th>Due Date</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for item in action_items %}
-                <tr>
-                    <td><strong>{{ item.task }}</strong></td>
-                    <td>{{ item.assignee }}</td>
-                    <td>{{ item.due_date or 'N/A' }}</td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    <div class="footer">
-        <p>Sent automatically via AI Thailand Onboarding 2026 Meeting AI Platform</p>
-    </div>
-</body>
-</html>
+  <div class="seal">S</div>
+  <h2>{{ subject }}</h2>
+  <p>{{ greeting }}</p>
+  {% for block in body_blocks %}
+    {% if block.startswith('“') %}<div class="quote">{{ block }}</div>{% else %}<p>{{ block }}</p>{% endif %}
+  {% endfor %}
+  {% if rows %}
+  <table>
+    <tr><th>เรื่อง</th><th>ผู้รับผิดชอบ</th><th>กำหนด</th><th>สถานะ</th></tr>
+    {% for row in rows %}
+    <tr>
+      <td>{{ row.text }}</td>
+      <td>{{ row.assignees or '-' }}</td>
+      <td>{{ row.due_date or '-' }}</td>
+      <td>{{ row.status }}{% if row.overdue %}<br/><span class="overdue">เกิน {{ row.overdue }} วัน</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  <div class="footer">ส่งโดยระบบสารบรรณการประชุมอัตโนมัติ (SARA) · อีเมลฉบับนี้ผ่านการตรวจและอนุมัติจากฝ่ายเลขานุการแล้ว</div>
+</body></html>
 """
 
-# Helper function to send email via SMTP
-def send_smtp_email(to_email: str, subject: str, html_content: str):
+
+def send_smtp_email(to_email: str, subject: str, html_content: str) -> None:
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
     smtp_pass = os.getenv("SMTP_PASSWORD")
 
     if not smtp_user or not smtp_pass:
-        raise ValueError("SMTP_USER and SMTP_PASSWORD environment variables are required.")
+        raise ValueError("ต้องตั้งค่า SMTP_USER และ SMTP_PASSWORD ก่อนจึงจะส่งอีเมลได้")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"Meeting AI Assistant <{smtp_user}>"
+    msg["From"] = f"SARA <{smtp_user}>"
     msg["To"] = to_email
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
 
-    msg.attach(MIMEText(html_content, "html"))
-
-    with smtplib.SMTP(smtp_host, smtp_port) as server:
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
         server.starttls()
         server.login(smtp_user, smtp_pass)
         server.sendmail(smtp_user, to_email, msg.as_string())
 
 
-# 4. Expose the MCP Tool
-@mcp.tool(
-    name="send_meeting_summary_email",
-    description="Sends formatted HTML meeting summaries and action items to a list of participant email addresses."
-)
-async def send_meeting_summary_email(
-    subject: str,
-    summary_bullets: List[str],
-    recipient_emails: List[str],  # <--- List of recipient emails
-    action_items: List[dict],
-    ctx: Context
-) -> str:
-    await ctx.info(f"Preparing meeting email dispatch for subject: '{subject}'")
-
-    # Render HTML Body
-    template = Template(HTML_EMAIL_TEMPLATE)
-    html_body = template.render(
-        subject=subject,
-        summary_bullets=summary_bullets,
-        action_items=action_items
+def _render(subject: str, greeting: str, body: str, rows: list[dict]) -> str:
+    blocks = [b.strip() for b in (body or "").split("\n\n") if b.strip()]
+    return Template(HTML_TEMPLATE).render(
+        subject=subject, greeting=greeting, body_blocks=blocks, rows=rows or []
     )
 
-    if not recipient_emails:
-        return "No participant emails provided. Delivery skipped."
 
-    sent_count = 0
-    failed_emails = []
+@mcp.tool(
+    name="send_meeting_email",
+    description=(
+        "ส่งอีเมลรายงานการประชุม การแจ้งเตือนมติ หรือสรุปวาระ ถึงผู้รับหนึ่งคน "
+        "เนื้อหาที่ส่งต้องผ่านการอนุมัติจากฝ่ายเลขานุการมาแล้ว"
+    ),
+)
+async def send_meeting_email(
+    to_email: str,
+    subject: str,
+    greeting: str,
+    body: str,
+    rows: list[dict],
+    ctx: Context,
+) -> str:
+    """
+    ส่งทีละคน ไม่รับ list ของผู้รับ
 
-    # Send to every participant email in the list
-    for email in recipient_emails:
-        try:
-            send_smtp_email(to_email=email, subject=subject, html_content=html_body)
-            sent_count += 1
-            await ctx.info(f"Successfully sent summary to: {email}")
-        except Exception as err:
-            await ctx.error(f"Failed to send email to {email}: {err}")
-            failed_emails.append(email)
+    เจตนา: อีเมลประชุมมีชั้นความลับ การส่งฉบับเดียวหาหลายคนพร้อมกัน
+    ทำให้เนื้อหาที่ควรเห็นเฉพาะบางคนหลุดข้ามฝ่ายได้ (FR-M7-02 personalized ต่อคน)
+    """
+    if not to_email:
+        return "ไม่ได้ระบุอีเมลผู้รับ ยกเลิกการส่ง"
 
-    return f"Email summary delivered to {sent_count}/{len(recipient_emails)} participants."
-
-
-# 5. Entry Point: SSE / HTTP or Stdio Transport
-if __name__ == "__main__":
-    # Runs the MCP server with HTTP/SSE transport on port 8001
-    os.environ.setdefault("FASTMCP_HOST", "0.0.0.0")
-    os.environ.setdefault("FASTMCP_PORT", "8001")
-    if hasattr(mcp, "settings"):
-        mcp.settings.host = "0.0.0.0"
-        mcp.settings.port = 8001
+    await ctx.info(f"กำลังส่งอีเมลถึง {to_email}: {subject}")
     try:
-        mcp.run(transport="sse", host="0.0.0.0", port=8001)
+        send_smtp_email(to_email, subject, _render(subject, greeting, body, rows))
+    except Exception as err:  # noqa: BLE001
+        await ctx.error(f"ส่งอีเมลถึง {to_email} ไม่สำเร็จ: {err}")
+        raise
+
+    await ctx.info(f"ส่งอีเมลถึง {to_email} สำเร็จ")
+    return f"ส่งอีเมลถึง {to_email} เรียบร้อยแล้ว"
+
+
+@mcp.tool(
+    name="create_tracker_issue",
+    description="สร้าง issue ในระบบติดตามงานภายนอก — มีไว้เพื่อพิสูจน์ว่า action layer สลับปลายทางได้",
+)
+async def create_tracker_issue(title: str, description: str, assignee: str, ctx: Context) -> str:
+    """
+    FR-M7-05 — ตั้งใจให้เป็นหลักฐานเชิงสถาปัตยกรรม ไม่ใช่ฟีเจอร์หลัก
+    ยังไม่ได้ต่อกับ Jira จริง จึงบันทึกลง log อย่างเดียวและบอกตามตรงว่ายังไม่ได้สร้าง issue
+    """
+    await ctx.info(f"[tracker] {title} → {assignee}: {description[:120]}")
+    return (
+        "บันทึกคำขอสร้าง issue แล้ว แต่ยังไม่ได้เชื่อมต่อกับระบบติดตามงานจริง "
+        "(ต้องตั้งค่า endpoint และ credential ของ Jira ก่อน)"
+    )
+
+
+if __name__ == "__main__":
+    host = os.getenv("FASTMCP_HOST", "0.0.0.0")
+    port = int(os.getenv("FASTMCP_PORT", "8001"))
+    if hasattr(mcp, "settings"):
+        mcp.settings.host = host
+        mcp.settings.port = port
+    try:
+        mcp.run(transport="sse", host=host, port=port)
     except TypeError:
         mcp.run(transport="sse")
