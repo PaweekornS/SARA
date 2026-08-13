@@ -67,5 +67,7 @@ def read_magic_token(token: str) -> dict | None:
 
 
 def magic_link_url(resolution_id: UUID, person_id: UUID) -> str:
+    #  router ทุกตัวถูก mount ใต้ API_V1_STR — ลิงก์ต้องมี prefix นี้ ไม่งั้นอีเมลพาไป 404
     token = make_magic_token(resolution_id, person_id)
-    return f"{settings.PUBLIC_BASE_URL.rstrip('/')}/public/resolutions/{token}"
+    base = settings.PUBLIC_BASE_URL.rstrip("/")
+    return f"{base}{settings.API_V1_STR}/public/resolutions/{token}"

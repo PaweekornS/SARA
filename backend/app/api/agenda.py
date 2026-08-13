@@ -9,10 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.db.models import AgendaDraft, AgendaItem, MeetingSeries, Person, Resolution, ResolutionAssignee
+from app.db.models import AgendaDraft, AgendaItem, MeetingSeries, Resolution
 from app.db.session import get_db
 from app.schemas import AgendaItemsPatch, AgendaOut
-from app.services.agenda_builder import SECTION_TITLES, STATUS_LABEL_TH
+from app.services.agenda_builder import SECTION_TITLES, STATUS_LABEL_TH, assignee_names
 from app.services.docx_export import build_agenda_docx
 from app.services.resolutions import get_or_404, overdue_days
 
@@ -121,18 +121,13 @@ async def agenda_summary(agenda_id: UUID, db: AsyncSession = Depends(get_db)):
         resolution = await db.get(Resolution, item.resolution_id)
         if resolution is None:
             continue
-        names = (
-            await db.execute(
-                select(Person)
-                .join(ResolutionAssignee, ResolutionAssignee.person_id == Person.id)
-                .where(ResolutionAssignee.resolution_id == resolution.id)
-            )
-        ).scalars().all()
+        #  ใช้ตัวเดียวกับที่สร้างเนื้อวาระ ตารางสรุปกับตัวเอกสารจะได้ไม่เรียงชื่อคนละแบบ
+        names = await assignee_names(db, resolution.id)
         rows.append(
             {
                 "ref_no": resolution.ref_no,
                 "text": resolution.text,
-                "assignees": ", ".join(p.full_name for p in names),
+                "assignees": ", ".join(names),
                 "due_date": resolution.due_date,
                 "status": STATUS_LABEL_TH.get(resolution.status, resolution.status),
                 "overdue": overdue_days(resolution),

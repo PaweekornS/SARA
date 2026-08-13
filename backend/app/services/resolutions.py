@@ -139,7 +139,7 @@ async def change_status(
 
     if new_status in (ResolutionStatus.DONE, ResolutionStatus.CANCELLED) and not reason.strip():
         raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=422,  # ชื่อค่าคงที่ของ Starlette เปลี่ยนไปมาระหว่างรุ่น ใช้ตัวเลขตรง ๆ ชัดกว่า
             detail="การปิดหรือยกเลิกมติต้องระบุเหตุผลกำกับเสมอ",
         )
 
