@@ -1,6 +1,6 @@
 services:
   # -------------------------------
-  # 1. PostgreSQL Database
+  # 1. PostgreSQL
   # -------------------------------
   db:
     image: postgres:15-alpine
@@ -11,6 +11,8 @@ services:
       POSTGRES_PASSWORD: postgrespassword
       POSTGRES_DB: aiaas_db
     ports:
+      # ถ้าเครื่องมี PostgreSQL ของตัวเองอยู่แล้ว พอร์ต 5432 จะชนกัน
+      # เปลี่ยนฝั่งซ้ายเป็น 5433 ได้ ภายใน compose ยังคุยกันที่ db:5432 เหมือนเดิม
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -21,7 +23,7 @@ services:
       retries: 5
 
   # ---------------------------------
-  # 2. Redis Task Broker & Queue
+  # 2. Redis (broker ของ Celery)
   # ---------------------------------
   redis:
     image: redis:7-alpine
@@ -36,7 +38,25 @@ services:
       retries: 5
 
   # ---------------------------------
-  # 3. FastAPI Web Server
+  # 3. รัน migration แล้วจบ (ทำงานครั้งเดียวก่อนบริการอื่นเริ่ม)
+  # ---------------------------------
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    container_name: aiaas_migrate
+    command: sh -c "alembic upgrade head && python -m app.seed"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------
+  # 4. FastAPI
   # ---------------------------------
   backend:
     build:
@@ -52,16 +72,20 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
       - REDIS_URL=redis://redis:6379/0
       - MCP_SERVER_URL=http://mcp_server:8001/mcp
+      - UPLOAD_DIR=/data/uploads
+      - PUBLIC_BASE_URL=http://localhost:8000
     volumes:
-      - shared_tmp:/tmp
+      - shared_uploads:/data/uploads
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   # ---------------------------------
-  # 4. Celery Background Worker (Runs ASR & Qwen LLM)
+  # 5. Celery worker (ASR · สกัดมติ · ส่งอีเมล)
   # ---------------------------------
   celery_worker:
     build:
@@ -69,7 +93,6 @@ services:
       dockerfile: Dockerfile.backend
     container_name: aiaas_celery_worker
     restart: always
-    # Override startup command to run as Celery worker
     command: celery -A app.workers.tasks.celery_app worker --loglevel=info
     env_file:
       - .env
@@ -77,15 +100,36 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
       - REDIS_URL=redis://redis:6379/0
       - MCP_SERVER_URL=http://mcp_server:8001/mcp
+      - UPLOAD_DIR=/data/uploads
+      - PUBLIC_BASE_URL=http://localhost:8000
     volumes:
-      - shared_tmp:/tmp
+      - shared_uploads:/data/uploads
     depends_on:
       - backend
       - redis
       - mcp_server
 
+  # ---------------------------------
+  # 6. Celery beat — FR-M7-06 trigger ตามเวลา (สแกนมติใกล้ครบกำหนดทุกเช้า)
+  # ---------------------------------
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.backend
+    container_name: aiaas_celery_beat
+    restart: always
+    command: celery -A app.workers.tasks.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - celery_worker
+
   # -------------------------------------
-  # 5. MCP Server (Email Dispatcher Tool)
+  # 7. MCP server (ชั้น action ทั้งหมดออกทางนี้)
   # -------------------------------------
   mcp_server:
     build:
@@ -95,27 +139,28 @@ services:
     restart: always
     ports:
       - "8001:8001"
-    # Override startup command to run FastMCP Server
     command: python mcp_server.py
     env_file:
       - .env
 
   # -------------------------------------
-  # 6. Next.js Web Frontend
+  # 8. Next.js frontend
   # -------------------------------------
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.frontend
+      args:
+        # NEXT_PUBLIC_* ถูกฝังตอน build — ต้องส่งเป็น build arg ไม่ใช่ environment
+        NEXT_PUBLIC_API_URL: http://localhost:8000/api
+        NEXT_PUBLIC_USE_MOCK: "false"
     container_name: aiaas_frontend
     restart: always
     ports:
       - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000/api
     depends_on:
       - backend
 
 volumes:
   postgres_data:
-  shared_tmp:
+  shared_uploads:

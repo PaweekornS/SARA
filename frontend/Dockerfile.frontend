@@ -12,14 +12,18 @@ RUN npm ci
 # Copy the rest of the application code
 COPY . .
 
-# Disable Next.js telemetry
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# NEXT_PUBLIC_* ถูกฝังตอน build ไม่ใช่ตอนรัน จึงต้องรับเป็น build arg
+# ค่าเริ่มต้นชี้ไป backend ที่มากับ docker compose และปิด mock ให้ใช้ข้อมูลจริง
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000/api
+ARG NEXT_PUBLIC_USE_MOCK=false
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_USE_MOCK=$NEXT_PUBLIC_USE_MOCK
 
 # Build the Next.js production bundle
 RUN npm run build
 
-# Expose Next.js default port
 EXPOSE 3000
 
-# Start the Next.js server
 CMD ["npm", "run", "start"]
