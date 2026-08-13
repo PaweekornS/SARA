@@ -22,7 +22,7 @@ docker compose up -d --build
 | บริการ | พอร์ต | หน้าที่ |
 |---|---|---|
 | frontend | 3000 | หน้าจอทั้งหมด (Next.js) |
-| backend | 8000 | REST API · เอกสาร OpenAPI ที่ `/api/docs` |
+| backend | 8000 | REST API · เอกสาร OpenAPI ที่ `/docs` |
 | mcp_server | 8001 | ชั้น action — ทุกอีเมลออกทางนี้ทางเดียว |
 | celery_worker | — | ถอดเสียง สกัดมติ จับคู่ข้ามการประชุม ส่งอีเมล |
 | celery_beat | — | สแกนมติใกล้ครบกำหนดทุกเช้า สร้างรายการเตือนเข้าคิวรออนุมัติ |

@@ -118,7 +118,7 @@ docker compose ps
 |---|---|
 | Frontend | http://localhost:3000 |
 | Backend API | http://localhost:8000/api |
-| OpenAPI / Swagger | http://localhost:8000/api/docs |
+| OpenAPI / Swagger | http://localhost:8000/docs |
 | MCP server | http://localhost:8001/mcp |
 
 ### 2.4 เครื่องมือช่วยตรวจ
@@ -136,7 +136,7 @@ docker compose exec celery_worker python -c "from app.workers.tasks import scan_
 
 > ⚠ **การยิง API ด้วย `curl` บน Windows PowerShell จะทำให้ภาษาไทยกลายเป็น `?????`**
 > ให้ใช้วิธีใดวิธีหนึ่งแทน
-> 1. ยิงผ่านหน้า **Swagger UI ที่ `/api/docs`** (แนะนำที่สุด — ไม่มีปัญหา encoding เลย)
+> 1. ยิงผ่านหน้า **Swagger UI ที่ `/docs`** (แนะนำที่สุด — ไม่มีปัญหา encoding เลย)
 > 2. เขียน body ลงไฟล์ `.json` แบบ UTF-8 แล้วใช้ `curl -d @body.json`
 > 3. ใช้ Bash tool / WSL แทน PowerShell
 
@@ -249,7 +249,7 @@ docker compose down -v       # หยุดและล้างข้อมู�
 | # | ทำอะไร | ผลที่ต้องได้ |
 |---|---|---|
 | TC-SMK-01 | เปิด http://localhost:3000 | เห็นหน้ารายการชุดการประชุม 2 ชุด ไม่มี error ใน console |
-| TC-SMK-02 | เปิด http://localhost:8000/api/docs | Swagger แสดง endpoint ครบ 38 รายการ |
+| TC-SMK-02 | เปิด http://localhost:8000/docs | Swagger แสดง endpoint ครบ 38 รายการ |
 | TC-SMK-03 | `GET /api/bootstrap` | HTTP 200 · `resolutions` มี 12 รายการ · ภาษาไทยอ่านออกไม่เพี้ยน |
 | TC-SMK-04 | คลิกชุด "คณะกรรมการบริหาร ปีงบประมาณ 2569" | แดชบอร์ดขึ้นการ์ด 12 / 5 / 5 / 2 และอัตราการปิด 50 % |
 | TC-SMK-05 | เมนู "ทะเบียนมติ" | เห็น 12 แถว แถวบนสุดคือมติที่เกินกำหนดมากที่สุด |

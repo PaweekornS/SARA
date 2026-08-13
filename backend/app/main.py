@@ -26,7 +26,8 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     version="2.0.0",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    docs_url=f"{settings.API_V1_STR}/docs",
+    #  docs_url/redoc_url ใช้ค่าเริ่มต้นของ FastAPI คือ /docs และ /redoc
+    #  router ทั้งหมดอยู่ใต้ /api อยู่แล้ว จึงไม่ชนกัน
     lifespan=lifespan,
 )
 
