@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   NEXT_STATUSES,
+  activeSegmentIndex,
   escapeHtml,
   formatThaiDate,
   formatTimecode,
@@ -92,4 +93,16 @@ test("วันที่แสดงเป็น พ.ศ. และ timecode ไ
   assert.equal(formatTimecode(null), "--:--");
   assert.equal(formatTimecode(688_000), "11:28");
   assert.equal(formatTimecode(3_661_000), "1:01:01");
+});
+
+test("หัวอ่านชี้ท่อนที่ถูก และไม่หลุดตอนเงียบระหว่างท่อน", () => {
+  const segments = [{ start_ms: 0 }, { start_ms: 18_000 }, { start_ms: 35_000 }];
+
+  assert.equal(activeSegmentIndex(segments, 0), 0);
+  assert.equal(activeSegmentIndex(segments, 17_999), 0);
+  assert.equal(activeSegmentIndex(segments, 18_000), 1, "ตรงวินาทีที่เริ่ม ต้องเป็นท่อนใหม่ ไม่ใช่ท่อนก่อน");
+  assert.equal(activeSegmentIndex(segments, 34_000), 1, "ช่วงเงียบต้องคาที่ท่อนล่าสุด ไม่ใช่ -1");
+  assert.equal(activeSegmentIndex(segments, 900_000), 2, "เลยท่อนสุดท้ายต้องคาท่อนสุดท้าย");
+  assert.equal(activeSegmentIndex(segments, -1), -1, "ยังไม่เริ่มเล่นต้องไม่เน้นบรรทัดใด");
+  assert.equal(activeSegmentIndex([], 5_000), -1);
 });

@@ -9,6 +9,7 @@ from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +41,7 @@ from app.schemas import (
     SpeakerPatch,
     UploadAccepted,
 )
+from app.services.audio_file import audio_media_type, resolve_audio_path
 from app.services.docx_export import build_minutes_docx
 from app.services.resolutions import (
     audit,
@@ -190,6 +192,21 @@ async def transcript(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
         .order_by(TranscriptSegment.start_ms)
     )
     return list(rows.scalars().all())
+
+
+@router.get("/{meeting_id}/audio")
+async def audio(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
+    """ส่งไฟล์เสียงต้นฉบับ ให้หน้าตรวจทานกดฟังย้อนตาม timestamp ของแต่ละท่อนได้
+
+    FileResponse ของ Starlette ตอบ Range/206 ให้เอง จึงกระโดดไปวินาทีที่อ้างอิงได้
+    โดยไม่ต้องโหลดไฟล์ทั้งก้อน
+    ยังไม่มีการยืนยันตัวตน เหมือน endpoint อื่นทั้งระบบ — ใครมี meeting_id ก็ฟังได้
+    """
+    meeting = await get_or_404(db, Meeting, meeting_id, "การประชุม")
+    path = resolve_audio_path(meeting.audio_uri, settings.UPLOAD_DIR)
+    if path is None:
+        raise HTTPException(status_code=404, detail="ไม่พบไฟล์เสียงของการประชุมนี้")
+    return FileResponse(path, media_type=audio_media_type(path))
 
 
 @router.patch("/{meeting_id}/speakers", response_model=Ack)

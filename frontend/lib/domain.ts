@@ -85,6 +85,23 @@ export function formatTimecode(ms: number | null) {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
 }
 
+/**
+ * ท่อนที่หัวอ่านอยู่ หรือ -1 ถ้ายังไม่ถึงท่อนแรก
+ *
+ * ใช้ "ท่อนล่าสุดที่เริ่มแล้ว" ไม่ใช่ "ท่อนที่คร่อมเวลานี้" เพราะระหว่างท่อนมีช่วงเงียบ
+ * ถ้าเลือกแบบคร่อม บรรทัดที่เน้นจะกระพริบหายตอนเงียบ
+ * ต้องการ segments ที่เรียงตาม start_ms แล้ว (หน้าตรวจทานเรียงให้ก่อนส่งเข้ามา)
+ */
+export function activeSegmentIndex(
+  segments: Array<{ start_ms: number }>,
+  currentMs: number,
+): number {
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    if (currentMs >= segments[i].start_ms) return i;
+  }
+  return -1;
+}
+
 export function shortText(text: string, max: number) {
   return text.length <= max ? text : `${text.slice(0, max).trimEnd()}…`;
 }

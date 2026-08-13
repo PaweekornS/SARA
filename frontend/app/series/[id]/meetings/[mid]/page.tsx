@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   BadgeCheck,
@@ -26,6 +26,7 @@ import {
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { PipelineStatus } from "@/components/meeting-ingest";
 import { ResolutionDrawer, ResolutionRow } from "@/components/resolution-detail";
+import { TranscriptPlayer } from "@/components/transcript-player";
 import {
   Badge,
   Button,
@@ -72,9 +73,16 @@ export default function MeetingReviewPage() {
   const router = useRouter();
   const { db } = useApp();
   const { id: seriesId, mid } = useParams<{ id: string; mid: string }>();
+  const params = useSearchParams();
+
+  // มาจากลิงก์อ้างอิงในหน้าถาม-ตอบ: ?t=<ms>&seg=<segment_id> ให้เปิดแท็บบันทึก
+  // แล้วจ่อหัวอ่านไว้ที่ช่วงเวลานั้นเลย ไม่ต้องให้ผู้ใช้ไถหาเอง
+  const citedRaw = Number(params.get("t"));
+  const citedMs = Number.isFinite(citedRaw) && params.get("t") !== null ? citedRaw : null;
+  const citedSegmentIds = params.get("seg") ? [params.get("seg") as string] : [];
 
   const meeting = db.meetings.find((m) => m.id === mid);
-  const [tab, setTab] = useState<Tab>("proposals");
+  const [tab, setTab] = useState<Tab>(citedMs === null ? "proposals" : "transcript");
   const [openRes, setOpenRes] = useState<string | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
 
@@ -286,37 +294,12 @@ export default function MeetingReviewPage() {
             {tab === "speakers" && <SpeakerMapping meetingId={meeting.id} />}
 
             {tab === "transcript" && (
-              <Card className="overflow-hidden">
-                <CardHead
-                  title={t("transcript")}
-                  desc={t.pick(
-                    "ทุกท่อนเก็บ timestamp ไว้ เพื่อให้ย้อนกลับไปตรวจหลักฐานของมติได้เสมอ",
-                    "Every segment keeps its timestamp so any resolution can be traced back.",
-                  )}
-                />
-                <div className="divide-y divide-[var(--line)]">
-                  {segments.map((s) => (
-                    <div key={s.id} className="flex gap-4 px-5 py-3.5">
-                      <div className="w-[92px] shrink-0">
-                        <p className="tnum font-mono text-[12px] text-ink-3">{formatTimecode(s.start_ms)}</p>
-                        <p
-                          className={cn(
-                            "mt-1 truncate text-[12px] font-medium",
-                            s.person_id ? "text-brand" : "text-[var(--warn)]",
-                          )}
-                          title={s.person_id ? personName(db, s.person_id) : s.speaker_label}
-                        >
-                          {s.person_id ? personName(db, s.person_id) : s.speaker_label}
-                        </p>
-                      </div>
-                      <p className="flex-1 text-[13.5px] leading-relaxed text-ink-2">{s.text}</p>
-                      <div className="hidden shrink-0 pt-0.5 sm:block">
-                        <ConfidenceBar value={s.confidence} showLabel={false} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Card>
+              <TranscriptPlayer
+                segments={segments}
+                audioUrl={meeting.source_kind === "audio" ? api.meetingAudioUrl(meeting.id) : null}
+                initialMs={citedMs}
+                citedSegmentIds={citedSegmentIds}
+              />
             )}
 
             {tab === "resolutions" && (

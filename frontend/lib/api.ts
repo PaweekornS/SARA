@@ -58,3 +58,11 @@ export function agendaExportUrl(agendaId: Uuid): string | null {
 export function minutesExportUrl(meetingId: Uuid): string | null {
   return store.LIVE ? http.minutesExportUrl(meetingId) : null;
 }
+
+/**
+ * ไฟล์เสียงของการประชุม — คืน null ในโหมด mock เพราะ seed ชี้ไป minio:// ที่เล่นไม่ได้
+ * ผู้เรียกต้องซ่อนเครื่องเล่นเมื่อได้ null ไม่ใช่ปล่อยปุ่มที่กดแล้วเงียบ
+ */
+export function meetingAudioUrl(meetingId: Uuid): string | null {
+  return store.LIVE ? http.meetingAudioUrl(meetingId) : null;
+}

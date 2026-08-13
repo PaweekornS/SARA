@@ -75,6 +75,12 @@ const dict = {
   retry: ["ลองใหม่", "Retry"],
   transcript: ["บันทึกคำต่อคำ", "Transcript"],
   speakers: ["ผู้พูด", "Speakers"],
+  play: ["เล่นเสียง", "Play"],
+  pause: ["หยุดเสียง", "Pause"],
+  back10: ["ถอย 10 วินาที", "Back 10 seconds"],
+  noAudio: ["การประชุมนี้ไม่มีไฟล์เสียง", "No audio for this meeting"],
+  audioFailed: ["เปิดไฟล์เสียงไม่สำเร็จ", "Could not load the audio"],
+  jumpToMoment: ["ฟังช่วงนี้", "Play this moment"],
   pendingReview: ["รอการตรวจทาน", "Awaiting review"],
 
   /* review */

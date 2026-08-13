@@ -204,6 +204,11 @@ export function minutesExportUrl(meetingId: Uuid) {
   return `${BASE}/meetings/${meetingId}/export?format=docx`;
 }
 
+/** ไฟล์เสียงต้นฉบับ — backend ตอบ Range ได้ จึง seek ไปวินาทีที่อ้างอิงได้เลย */
+export function meetingAudioUrl(meetingId: Uuid) {
+  return `${BASE}/meetings/${meetingId}/audio`;
+}
+
 /* ── M7 คิวส่งออก ────────────────────────────────────────────────────── */
 
 export function approveAction(id: Uuid, actor: string) {

@@ -34,6 +34,20 @@ class LlmError(RuntimeError):
     """เรียกโมเดลไม่สำเร็จ หรือได้คำตอบที่ใช้ต่อไม่ได้"""
 
 
+# remove <thinking> 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINK_OPEN_RE = re.compile(r"<think>", re.IGNORECASE)
+
+
+def _strip_reasoning(text: str) -> str:
+    """ Clean Thinking token from output """
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    unclosed = _THINK_OPEN_RE.search(cleaned)
+    if unclosed:
+        cleaned = cleaned[: unclosed.start()]
+    return cleaned.strip()
+
+
 def chat(messages: list[dict], temperature: float = 0.2, json_mode: bool = False) -> str:
     kwargs = {
         "model": settings.PATHUMMA_MODEL_NAME,
@@ -49,7 +63,7 @@ def chat(messages: list[dict], temperature: float = 0.2, json_mode: bool = False
     except Exception as err:  # noqa: BLE001
         raise LlmError(f"เรียก {settings.PATHUMMA_MODEL_NAME} ไม่สำเร็จ: {err}") from err
 
-    content = (response.choices[0].message.content or "").strip()
+    content = _strip_reasoning(response.choices[0].message.content or "")
     if not content:
         raise LlmError("โมเดลตอบกลับมาเป็นค่าว่าง")
     return content

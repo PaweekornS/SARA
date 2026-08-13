@@ -3,6 +3,7 @@
 /** M8 — ถาม-ตอบข้ามการประชุม ทุกคำตอบต้องอ้างอิงกลับได้เสมอ (FR-M8-02) */
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Clock, CornerDownLeft, Database, FileSearch, Loader2, Search, Sparkles, Trash2 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/app-shell";
@@ -151,10 +152,25 @@ export default function AskPage() {
                               {t.pick("ครั้งที่", "Meeting")} {m?.sequence_no}/{m?.fiscal_year} ·{" "}
                               <span className="tnum">{m ? formatThaiDate(m.meeting_date, true) : ""}</span>
                             </span>
-                            <span className="inline-flex items-center gap-1">
-                              <Clock size={11} />
-                              <span className="tnum font-mono">{formatTimecode(c.start_ms)}</span>
-                            </span>
+                            {/* timecode กดได้ พาไปเปิดบันทึกตรงช่วงที่อ้างถึงแล้วกดฟังได้ทันที
+                                ถ้าไม่รู้เวลา (อ้างจากทะเบียนมติ) แสดงเป็นข้อความเฉย ๆ */}
+                            {c.start_ms == null ? (
+                              <span className="inline-flex items-center gap-1">
+                                <Clock size={11} />
+                                <span className="tnum font-mono">{formatTimecode(c.start_ms)}</span>
+                              </span>
+                            ) : (
+                              <Link
+                                href={`/series/${seriesId}/meetings/${c.meeting_id}?t=${c.start_ms}${
+                                  c.segment_id ? `&seg=${c.segment_id}` : ""
+                                }`}
+                                title={t("jumpToMoment")}
+                                className="inline-flex cursor-pointer items-center gap-1 font-medium text-brand hover:underline"
+                              >
+                                <Clock size={11} />
+                                <span className="tnum font-mono">{formatTimecode(c.start_ms)}</span>
+                              </Link>
+                            )}
                             {c.resolution_id && (
                               <button
                                 onClick={() => setOpenRes(c.resolution_id!)}

@@ -1247,6 +1247,7 @@ export {
   OPEN_STATUSES,
   STATUS_LABEL_TH,
   TODAY,
+  activeSegmentIndex,
   assigneeNames,
   daysUntil,
   formatEnDate,
