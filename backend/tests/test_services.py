@@ -23,6 +23,7 @@ from app.db.models import ResolutionStatus
 from app.services import extraction
 from app.services.agenda_builder import STATUS_LABEL_TH, agenda_topic
 from app.services.docx_export import build_agenda_docx, build_minutes_docx
+from app.services.llm import LlmError, _parse_json
 from app.services.mcp_agent import _sse_url, build_reminder_body
 from app.services.qa import relevance, thai_grams
 from app.services.resolutions import change_status, next_ref_no, overdue_days
@@ -63,6 +64,50 @@ class ThaiFormatting(unittest.TestCase):
     def test_status_labels_cover_every_status(self):
         for status in ResolutionStatus.TRANSITIONS:
             self.assertIn(status, STATUS_LABEL_TH)
+
+
+class LlmJsonParsing(unittest.TestCase):
+    """
+    โมเดลชอบยกคำพูดมาทั้งท่อนพร้อมตัวขึ้นบรรทัดใหม่จริง ๆ แทนที่จะ escape เป็น \\n
+    JSON เข้มงวดปัดตกอักขระควบคุมพวกนี้ทันที ทั้งที่เนื้อหาที่เหลือถูกต้องทุกตัวอักษร
+    """
+
+    def test_raw_newline_inside_a_string_value_is_still_parsed(self):
+        raw = '{"updates": [{"ref": "R1", "evidence": "บรรทัดแรก\nบรรทัดที่สอง", "confidence": 0.9}]}'
+        data = _parse_json(raw)
+        self.assertEqual(data["updates"][0]["evidence"], "บรรทัดแรก\nบรรทัดที่สอง")
+
+    def test_raw_tab_and_carriage_return_are_also_tolerated(self):
+        raw = '{"text": "ก่อน\tหลัง\rจบ"}'
+        self.assertEqual(_parse_json(raw)["text"], "ก่อน\tหลัง\rจบ")
+
+    def test_properly_escaped_newline_still_works(self):
+        raw = '{"text": "บรรทัดแรก\\nบรรทัดที่สอง"}'
+        self.assertEqual(_parse_json(raw)["text"], "บรรทัดแรก\nบรรทัดที่สอง")
+
+    def test_fenced_code_block_is_stripped_before_parsing(self):
+        raw = '```json\n{"new_resolutions": []}\n```'
+        self.assertEqual(_parse_json(raw), {"new_resolutions": []})
+
+    def test_control_character_survives_inside_a_fenced_block_too(self):
+        raw = '```json\n{"evidence": "ท่อนที่ตัดมา\nขึ้นบรรทัดใหม่กลางคำพูด"}\n```'
+        self.assertIn("\n", _parse_json(raw)["evidence"])
+
+    def test_falls_back_to_the_largest_brace_span_when_prose_surrounds_it(self):
+        raw = 'แน่นอนครับ นี่คือผลลัพธ์ที่สกัดได้ {"new_resolutions": []} หวังว่าจะเป็นประโยชน์นะครับ'
+        self.assertEqual(_parse_json(raw), {"new_resolutions": []})
+
+    def test_brace_fallback_also_tolerates_control_characters(self):
+        raw = 'ผลลัพธ์คือ {"evidence": "บรรทัดแรก\nบรรทัดที่สอง"} ครับ'
+        self.assertIn("\n", _parse_json(raw)["evidence"])
+
+    def test_genuinely_broken_json_raises_llm_error_not_a_raw_json_error(self):
+        with self.assertRaises(LlmError):
+            _parse_json('{"new_resolutions": [เขียนไม่ครบ')
+
+    def test_response_with_no_braces_at_all_raises_llm_error(self):
+        with self.assertRaises(LlmError):
+            _parse_json("ขออภัยครับ ไม่พบมติในบันทึกการประชุมนี้เลย")
 
 
 class StateMachine(unittest.TestCase):
@@ -395,6 +440,119 @@ class ExtractionFilters(unittest.TestCase):
 
     def test_empty_transcript_short_circuits_without_calling_the_model(self):
         self.assertEqual(extraction.extract([], [], "ครั้งที่ 1/2569").new_resolutions, [])
+
+
+class ExtractionChunking(unittest.TestCase):
+    """
+    thaillm-8b ปฏิเสธคำขอทั้งก้อนถ้าเกิน context ของมัน (ดูจาก error จริง: ขอ 63689
+    token แต่รับได้ 40960) — บันทึกยาวจึงต้องถูกแบ่งส่งเป็นช่วง ๆ แทนที่จะยิงทีเดียวทั้งไฟล์
+    """
+
+    def make_segments(self, count: int, text: str = "ท่อนคำพูดตัวอย่างที่ยาวพอสมควรสำหรับทดสอบ") -> list:
+        return [
+            extraction.SegmentView(index=i, speaker_label="SPEAKER_00", start_ms=i * 5000, text=text)
+            for i in range(count)
+        ]
+
+    def test_short_transcript_is_a_single_call(self):
+        with patch.object(extraction, "chat_json", return_value={}) as mock_chat:
+            extraction.extract(self.make_segments(3), [], "ครั้งที่ 1/2569")
+        mock_chat.assert_called_once()
+
+    def test_long_transcript_is_split_into_multiple_calls(self):
+        #  งบ token เล็กพอที่ 500 ท่อนสั้น ๆ ต้องแบ่งมากกว่าหนึ่งช่วงแน่นอน
+        with patch.object(extraction, "settings") as mock_settings, patch.object(
+            extraction, "chat_json", return_value={}
+        ) as mock_chat:
+            mock_settings.LLM_CONTEXT_TOKENS = 3000
+            mock_settings.LLM_RESPONSE_RESERVE_TOKENS = 200
+            extraction.extract(self.make_segments(500), [], "ครั้งที่ 1/2569")
+        self.assertGreater(mock_chat.call_count, 1)
+
+    def test_every_segment_appears_in_exactly_one_chunk(self):
+        with patch.object(extraction, "settings") as mock_settings:
+            mock_settings.LLM_CONTEXT_TOKENS = 3000
+            mock_settings.LLM_RESPONSE_RESERVE_TOKENS = 200
+            segments = self.make_segments(200)
+            chunks = extraction._chunk_segments(
+                segments, extraction._transcript_token_budget("(ยังไม่มีมติค้างจากการประชุมครั้งก่อน)", "ครั้งที่ 1/2569")
+            )
+        seen = [s.index for chunk in chunks for s in chunk]
+        self.assertEqual(seen, list(range(200)))
+        self.assertGreater(len(chunks), 1)
+
+    def test_a_single_oversized_segment_is_not_dropped(self):
+        """ท่อนเดียวที่ใหญ่เกินงบเองต้องยังถูกส่งไป ไม่ใช่ถูกตัดทิ้งเงียบ ๆ"""
+        huge = [extraction.SegmentView(index=0, speaker_label="SPEAKER_00", start_ms=0, text="ก" * 50_000)]
+        chunks = extraction._chunk_segments(huge, budget_tokens=100)
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0], huge)
+
+    def chunk_count(self, segments, open_res=()) -> int:
+        """
+        คำนวณจำนวนช่วงล่วงหน้าด้วยพารามิเตอร์ชุดเดียวกับที่ extract() จะใช้จริง
+        กันไม่ให้เทสเดา magic number ที่หลุดตามเมื่อสูตรประมาณ token เปลี่ยน
+        """
+        context = extraction._build_context(list(open_res))
+        budget = extraction._transcript_token_budget(context, "ครั้งที่ 1/2569")
+        return len(extraction._chunk_segments(segments, budget))
+
+    def test_results_from_every_chunk_are_merged(self):
+        with patch.object(extraction, "settings") as mock_settings:
+            mock_settings.LLM_CONTEXT_TOKENS = 3000
+            mock_settings.LLM_RESPONSE_RESERVE_TOKENS = 200
+            segments = self.make_segments(200)
+            n = self.chunk_count(segments)
+            self.assertGreater(n, 1, "ปรับพารามิเตอร์ของเทสนี้ — ต้องมีมากกว่า 1 ช่วงจึงจะทดสอบการรวมผลได้")
+            responses = [{"new_resolutions": [{"text": f"มติจากช่วงที่ {i}", "confidence": 0.9}]} for i in range(1, n + 1)]
+            with patch.object(extraction, "chat_json", side_effect=responses):
+                result = extraction.extract(segments, [], "ครั้งที่ 1/2569")
+        texts = {r.text for r in result.new_resolutions}
+        self.assertEqual(texts, {f"มติจากช่วงที่ {i}" for i in range(1, n + 1)})
+
+    def test_a_later_chunk_overrides_an_earlier_verdict_on_the_same_resolution(self):
+        """เรื่องเดียวกันถูกพูดถึงหลายช่วง — ช่วงหลังสุดพูดทีหลังในเนื้อการประชุมจริง ถือเป็นข้อมูลล่าสุดกว่า"""
+        open_res = [
+            extraction.OpenResolutionView(ref="R1", text="ข้อความมติ", status="confirmed", assignees="", due_date=None)
+        ]
+        with patch.object(extraction, "settings") as mock_settings:
+            mock_settings.LLM_CONTEXT_TOKENS = 3000
+            mock_settings.LLM_RESPONSE_RESERVE_TOKENS = 200
+            segments = self.make_segments(200)
+            n = self.chunk_count(segments, open_res)
+            self.assertGreater(n, 1, "ปรับพารามิเตอร์ของเทสนี้ — ต้องมีมากกว่า 1 ช่วงจึงจะทดสอบลำดับความสำคัญได้")
+            #  ทุกช่วงรายงาน in_progress ยกเว้นช่วงสุดท้ายที่รายงาน done
+            responses = [{"updates": [{"ref": "R1", "proposed_status": "in_progress", "confidence": 0.9}]}] * (n - 1)
+            responses.append({"updates": [{"ref": "R1", "proposed_status": "done", "confidence": 0.95}]})
+            with patch.object(extraction, "chat_json", side_effect=responses):
+                result = extraction.extract(segments, open_res, "ครั้งที่ 1/2569")
+        self.assertEqual(len(result.updates), 1)
+        self.assertEqual(result.updates[0].proposed_status, "done")
+
+    def test_a_failure_on_any_chunk_aborts_the_whole_extraction(self):
+        """§4.2 — extraction บางส่วนสำเร็จบางส่วนพังแล้วเดินต่อ อันตรายกว่าหยุดทั้งหมดไปเลย"""
+        with patch.object(extraction, "settings") as mock_settings, patch.object(
+            extraction, "chat_json", side_effect=[{}, LlmError("โมเดลไม่ตอบ")]
+        ):
+            mock_settings.LLM_CONTEXT_TOKENS = 3000
+            mock_settings.LLM_RESPONSE_RESERVE_TOKENS = 200
+            with self.assertRaises(LlmError):
+                extraction.extract(self.make_segments(200), [], "ครั้งที่ 1/2569")
+
+    def test_open_resolutions_context_is_sent_with_every_chunk(self):
+        """ทุกช่วงต้องเห็นมติค้างชุดเดียวกัน ไม่งั้นช่วงหลัง ๆ จะจับคู่มติเดิมไม่ได้เลย"""
+        open_res = [
+            extraction.OpenResolutionView(ref="R1", text="ข้อความมติ", status="confirmed", assignees="", due_date=None)
+        ]
+        with patch.object(extraction, "settings") as mock_settings, patch.object(
+            extraction, "chat_json", return_value={}
+        ) as mock_chat:
+            mock_settings.LLM_CONTEXT_TOKENS = 3000
+            mock_settings.LLM_RESPONSE_RESERVE_TOKENS = 200
+            extraction.extract(self.make_segments(200), open_res, "ครั้งที่ 1/2569")
+        self.assertGreater(mock_chat.call_count, 1)
+        for call in mock_chat.call_args_list:
+            self.assertIn("R1", call.args[1])
 
 
 class PersonResolution(unittest.TestCase):

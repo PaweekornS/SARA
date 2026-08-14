@@ -75,8 +75,11 @@ def _parse_json(raw: str) -> dict:
     if fenced:
         raw = fenced.group(1).strip()
 
+    #  strict=False: โมเดลชอบยกคำพูดมาทั้งท่อนแล้วใส่ตัวขึ้นบรรทัดใหม่จริง ๆ ไว้ในสตริง
+    #  แทนที่จะ escape เป็น \n ให้ถูกต้อง — JSON เข้มงวดจะปัดตกอักขระควบคุมพวกนี้ทันที
+    #  แม้เนื้อหาที่เหลือจะถูกต้องทุกตัวอักษรก็ตาม
     try:
-        return json.loads(raw)
+        return json.loads(raw, strict=False)
     except json.JSONDecodeError:
         pass
 
@@ -84,7 +87,7 @@ def _parse_json(raw: str) -> dict:
     start, end = raw.find("{"), raw.rfind("}")
     if start != -1 and end > start:
         try:
-            return json.loads(raw[start : end + 1])
+            return json.loads(raw[start : end + 1], strict=False)
         except json.JSONDecodeError as err:
             raise LlmError(f"โมเดลตอบกลับมาไม่ใช่ JSON ที่อ่านได้: {err}") from err
     raise LlmError("โมเดลตอบกลับมาโดยไม่มี JSON")

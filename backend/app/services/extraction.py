@@ -12,15 +12,23 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import date
 
+from app.core.config import settings
 from app.services.llm import LlmError, chat_json
 
 logger = logging.getLogger(__name__)
 
 #  ต่ำกว่านี้ถือว่าโมเดลไม่มั่นใจพอจะเสนอปิดมติ
 CLOSE_CONFIDENCE_FLOOR = 0.75
+
+#  BPE ของโมเดลตัดคำไทยละเอียดกว่าอังกฤษมาก ตัวเลขนี้เป็นค่าประมาณแบบระวังไว้ก่อน
+#  (ประเมินสูงกว่าจำนวน token จริง เพื่อให้แบ่งช่วงถี่กว่าที่จำเป็นดีกว่าเผลอส่งเกิน)
+CHARS_PER_TOKEN = 1.5
+SAFETY_MARGIN_TOKENS = 1000
+MIN_CHUNK_TOKENS = 2000
 
 
 @dataclass
@@ -116,36 +124,106 @@ def extract(
     open_resolutions: list[OpenResolutionView],
     meeting_label: str,
 ) -> ExtractionResult:
-    """เรียกโมเดลหนึ่งครั้งเพื่อสกัดมติใหม่ + จับคู่มติเดิม + เบาะแสชื่อผู้พูด"""
+    """
+    สกัดมติใหม่ + จับคู่มติเดิม + เบาะแสชื่อผู้พูด
+
+    การประชุมยาว ๆ ทำให้บันทึกคำต่อคำเกิน context ของโมเดลได้ง่าย (thaillm-8b รับได้
+    LLM_CONTEXT_TOKENS token ต่อคำขอ) จึงแบ่งส่งเป็นช่วง ๆ ตามจำนวนที่ประมาณว่าพอดี
+    แต่ละช่วงเห็นบริบทมติค้างชุดเดียวกันเสมอ เพื่อให้จับคู่กับมติเดิมได้จากทุกช่วง
+    """
     if not segments:
         return ExtractionResult()
 
-    transcript = "\n".join(
-        f"[{s.index}] ({s.speaker_label}) {s.text}" for s in segments
+    context = _build_context(open_resolutions)
+    valid_refs = {r.ref for r in open_resolutions}
+    max_index = len(segments) - 1
+
+    chunks = _chunk_segments(segments, _transcript_token_budget(context, meeting_label))
+    if len(chunks) > 1:
+        logger.info(
+            "บันทึกยาวเกินขีดจำกัด context ของโมเดล แบ่งส่งเป็น %s ช่วง (%s ท่อนทั้งหมด)",
+            len(chunks), len(segments),
+        )
+
+    merged = ExtractionResult()
+    latest_updates: dict[str, ResolutionUpdate] = {}
+
+    for i, chunk in enumerate(chunks, start=1):
+        transcript = "\n".join(f"[{s.index}] ({s.speaker_label}) {s.text}" for s in chunk)
+        user = (
+            f"การประชุม: {meeting_label}\n\n"
+            f"=== มติค้างของชุดการประชุมนี้ ===\n{context}\n\n"
+            f"=== บันทึกคำต่อคำของการประชุมครั้งนี้ (ช่วงที่ {i}/{len(chunks)}) ===\n{transcript}"
+        )
+
+        try:
+            data = chat_json(SYSTEM_PROMPT, user, temperature=0.1)
+        except LlmError:
+            logger.exception("สกัดมติไม่สำเร็จที่ช่วง %s/%s", i, len(chunks))
+            raise
+
+        partial = _to_result(data, valid_refs=valid_refs, max_index=max_index)
+        merged.new_resolutions.extend(partial.new_resolutions)
+        merged.speakers.extend(partial.speakers)
+        for update in partial.updates:
+            #  ช่วงหลังพูดถึงมติเดิมเรื่องเดียวกัน ถือเป็นรายงานที่ใหม่กว่าในเนื้อการประชุมเดียวกัน
+            latest_updates[update.ref] = update
+
+    merged.updates = list(latest_updates.values())
+    return merged
+
+
+def _build_context(open_resolutions: list[OpenResolutionView]) -> str:
+    if not open_resolutions:
+        return "(ยังไม่มีมติค้างจากการประชุมครั้งก่อน)"
+    return "\n".join(
+        f"- {r.ref} | สถานะ {r.status} | ผู้รับผิดชอบ {r.assignees or '-'}"
+        f" | กำหนด {r.due_date or '-'}\n  ข้อความมติ: {r.text}"
+        for r in open_resolutions
     )
 
-    if open_resolutions:
-        context = "\n".join(
-            f"- {r.ref} | สถานะ {r.status} | ผู้รับผิดชอบ {r.assignees or '-'}"
-            f" | กำหนด {r.due_date or '-'}\n  ข้อความมติ: {r.text}"
-            for r in open_resolutions
-        )
-    else:
-        context = "(ยังไม่มีมติค้างจากการประชุมครั้งก่อน)"
 
-    user = (
+def _approx_tokens(text: str) -> int:
+    return max(1, math.ceil(len(text) / CHARS_PER_TOKEN))
+
+
+def _transcript_token_budget(context: str, meeting_label: str) -> int:
+    """token ที่เหลือให้บันทึกคำต่อคำ หลังหักระบบพรอมป์ต์ + บริบทมติค้าง + ที่กันไว้ให้คำตอบ"""
+    wrapper = (
         f"การประชุม: {meeting_label}\n\n"
         f"=== มติค้างของชุดการประชุมนี้ ===\n{context}\n\n"
-        f"=== บันทึกคำต่อคำของการประชุมครั้งนี้ ===\n{transcript}"
+        f"=== บันทึกคำต่อคำของการประชุมครั้งนี้ (ช่วงที่ 1/1) ===\n"
     )
+    overhead = _approx_tokens(SYSTEM_PROMPT) + _approx_tokens(wrapper)
+    budget = (
+        settings.LLM_CONTEXT_TOKENS
+        - settings.LLM_RESPONSE_RESERVE_TOKENS
+        - overhead
+        - SAFETY_MARGIN_TOKENS
+    )
+    return max(budget, MIN_CHUNK_TOKENS)
 
-    try:
-        data = chat_json(SYSTEM_PROMPT, user, temperature=0.1)
-    except LlmError:
-        logger.exception("สกัดมติไม่สำเร็จ")
-        raise
 
-    return _to_result(data, valid_refs={r.ref for r in open_resolutions}, max_index=len(segments) - 1)
+def _chunk_segments(segments: list[SegmentView], budget_tokens: int) -> list[list[SegmentView]]:
+    """
+    แบ่งท่อนคำพูดเป็นช่วง ๆ ให้แต่ละช่วงไม่เกินงบ token ที่ประมาณไว้
+    ท่อนเดียวที่ใหญ่เกินงบเองก็ยังถูกส่งเดี่ยว ๆ ไป (ไม่ตัดเนื้อหาทิ้ง ปล่อยให้ gateway ตัดสิน)
+    """
+    chunks: list[list[SegmentView]] = []
+    current: list[SegmentView] = []
+    current_tokens = 0
+
+    for segment in segments:
+        line_tokens = _approx_tokens(f"[{segment.index}] ({segment.speaker_label}) {segment.text}\n")
+        if current and current_tokens + line_tokens > budget_tokens:
+            chunks.append(current)
+            current, current_tokens = [], 0
+        current.append(segment)
+        current_tokens += line_tokens
+
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _to_result(data: dict, valid_refs: set[str], max_index: int) -> ExtractionResult:

@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Celery](https://img.shields.io/badge/Celery-worker%20%2B%20beat-37814A?logo=celery&logoColor=white)](https://docs.celeryq.dev/)
 [![MCP](https://img.shields.io/badge/MCP-action%20layer-6E56CF)](https://modelcontextprotocol.io/)
-[![Tests](https://img.shields.io/badge/tests-244%20passing-brightgreen)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-261%20passing-brightgreen)](#-testing)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 [Quick Start](#-quick-start) · [Architecture](#-architecture) · [Domain Model](#-domain-model) · [API](#-api-reference) · [Testing](#-testing) · [Roadmap](#-roadmap)
@@ -217,7 +217,7 @@ SARA/
 │   │   ├── workers/       # Celery tasks — pipeline, scheduler, dispatch
 │   │   └── seed.py        # demo dataset
 │   ├── alembic/           # migrations (schema is Alembic's job alone)
-│   ├── tests/             # 244 tests
+│   ├── tests/             # 261 tests
 │   └── mcp_server.py      # MCP tools — the only outbound path
 ├── frontend/
 │   ├── app/               # Next.js App Router — 11 pages
@@ -297,6 +297,7 @@ Copy `.env.example` to `.env` at the repository root. Docker Compose injects `DA
 |---|---|---|
 | `APP_AI4THAI_API_KEY` | — | **Required.** ASR and LLM key. The API will not start without it. |
 | `PATHUMMA_MODEL_NAME` | `thaillm-8b` | LLM used for extraction and Q&A |
+| `LLM_CONTEXT_TOKENS` | `40960` | Context window of `PATHUMMA_MODEL_NAME`. Long transcripts are automatically split into multiple calls that stay under this limit — update it if you switch models. |
 | `ASR_URL` / `ASR_MODEL` | `…pathumma.in.th` / `ptm-asr-1` | Speech-to-text endpoint |
 | `DATABASE_URL` | — | `postgresql+asyncpg://…` |
 | `REDIS_URL` | `redis://localhost:6379/0` | Celery broker |
@@ -388,13 +389,13 @@ Interactive documentation: **<http://localhost:8000/docs>** · schema at `/api/o
 docker run -d --name sara_test_db -e POSTGRES_PASSWORD=postgrespassword \
     -e POSTGRES_DB=sara_test -p 55432:5432 postgres:15-alpine
 
-cd backend  && python -m unittest discover -s tests    # 244 tests, ~3 min
+cd backend  && python -m unittest discover -s tests    # 261 tests, ~4 min
 cd frontend && npm run check && npm run lint && npm run build
 ```
 
 | Suite | Tests | Covers | DB |
 |---|:---:|---|:---:|
-| `tests/test_services.py` | 64 | State machine · Thai dates and numerals · magic tokens · model-output filters · entity resolution · `.docx` generation | — |
+| `tests/test_services.py` | 81 | State machine · Thai dates and numerals · magic tokens · model-output filters · entity resolution · `.docx` generation · **long-transcript chunking** · **tolerant JSON parsing** | — |
 | `tests/test_api_registry.py` | 53 | Series · people registry · dashboard maths · cross-meeting Q&A · bootstrap · Thai `X-Actor` header | ✔ |
 | `tests/test_api_lifecycle.py` | 51 | Upload validation · review · approval gates · **every cell of the state-transition matrix** | ✔ |
 | `tests/test_api_output.py` | 45 | Agenda generation and export · outbound queue · magic links | ✔ |
