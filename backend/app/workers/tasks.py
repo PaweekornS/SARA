@@ -18,7 +18,6 @@ from datetime import date, timedelta
 from uuid import UUID
 
 from celery import Celery
-from celery.schedules import crontab
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -41,8 +40,7 @@ from app.db.models import (
 )
 from app.services import extraction
 from app.services.asr import AsrError, Transcript, load_transcript_file, transcribe_audio
-from app.services.llm import LlmError
-from app.services.resolutions import overdue_days, utcnow
+from app.services.resolutions import next_ref_no, overdue_days, utcnow
 from app.services.thai_format import thai_date
 
 logger = logging.getLogger(__name__)
@@ -54,13 +52,6 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone=settings.TIMEZONE,
     enable_utc=False,
-    beat_schedule={
-        #  FR-M7-06 scheduler สำหรับ trigger ตามเวลา
-        "scan-due-resolutions-every-morning": {
-            "task": "scan_due_resolutions",
-            "schedule": crontab(hour=8, minute=0),
-        },
-    },
 )
 
 
@@ -145,18 +136,9 @@ async def _process_meeting(meeting_id: UUID, file_path: str, simulate_asr_failur
             session, meeting, "asr", "ok",
             detail=f"ได้ {len(transcript.segments)} ท่อน จาก {settings.ASR_MODEL}",
         )
-
-        # 3) diarize
-        await _set_stage(session, meeting, "diarize", "running")
         segments = await _store_segments(session, meeting, transcript)
-        if transcript.has_speaker_labels:
-            speakers = len({s.speaker_label for s in segments})
-            diarize_detail = f"แยกได้ {speakers} ผู้พูดจากผลของ ASR"
-        else:
-            diarize_detail = "ASR ไม่คืนข้อมูลผู้พูด — ให้ระบุผู้พูดเองในหน้าตรวจทาน"
-        await _set_stage(session, meeting, "diarize", "ok", detail=diarize_detail)
 
-        # 4) extract + linking
+        # 3) extract (สรุปเนื้อหาและสกัดมติ)
         await _set_stage(session, meeting, "extract", "running")
         try:
             created = await _extract_and_link(session, meeting, series, segments)
@@ -168,9 +150,9 @@ async def _process_meeting(meeting_id: UUID, file_path: str, simulate_asr_failur
             await _fail(session, meeting, "extract", f"สกัดมติไม่สำเร็จ: {err}")
             return {"status": "FAILED", "stage": "extract"}
 
-        await _set_stage(session, meeting, "extract", "ok", detail=f"สร้างข้อเสนอ {created} รายการ")
+        await _set_stage(session, meeting, "extract", "ok", detail=f"สกัดมติได้ {created} รายการ")
 
-        # 5) done
+        # 4) done
         await _set_stage(session, meeting, "done", "ok", detail="พร้อมให้ตรวจทาน")
         meeting.status = MeetingStatus.DRAFT
         await session.commit()
@@ -227,41 +209,8 @@ async def _extract_and_link(
     segments: list[TranscriptSegment],
 ) -> int:
     """
-    FR-M4-01, 02, 04, 05 — สกัดมติใหม่ และจับคู่คำพูดใหม่กับมติค้างของ series
-
-    ทุกอย่างที่ได้จากโมเดลถูกบันทึกเป็น Proposal ที่ยังไม่มีผล
-    มติจริงจะเกิดก็ต่อเมื่อมีคนกดยืนยันในหน้าตรวจทานเท่านั้น
+    สรุปเนื้อหา ASR + สกัดมติจากการประชุม และผูกฝ่ายรับผิดชอบเบื้องต้น
     """
-    open_resolutions = list(
-        (
-            await session.execute(
-                select(Resolution).where(
-                    Resolution.series_id == meeting.series_id,
-                    Resolution.status.in_(ResolutionStatus.OPEN),
-                )
-            )
-        ).scalars().all()
-    )
-
-    views = []
-    for r in open_resolutions:
-        names = (
-            await session.execute(
-                select(Person)
-                .join(ResolutionAssignee, ResolutionAssignee.person_id == Person.id)
-                .where(ResolutionAssignee.resolution_id == r.id)
-            )
-        ).scalars().all()
-        views.append(
-            extraction.OpenResolutionView(
-                ref=r.ref_no,
-                text=r.text,
-                status=r.status,
-                assignees=", ".join(p.full_name for p in names),
-                due_date=r.due_date.isoformat() if r.due_date else None,
-            )
-        )
-
     segment_views = [
         extraction.SegmentView(index=i, speaker_label=s.speaker_label, start_ms=s.start_ms, text=s.text)
         for i, s in enumerate(segments)
@@ -269,62 +218,68 @@ async def _extract_and_link(
 
     result = extraction.extract(
         segment_views,
-        views,
         meeting_label=f"ครั้งที่ {meeting.sequence_no}/{meeting.fiscal_year} วันที่ {thai_date(meeting.meeting_date)}",
     )
 
-    by_ref = {r.ref_no: r for r in open_resolutions}
-    created = 0
+    if result.summary:
+        meeting.summary = result.summary
 
-    #  ข้อเสนอเปลี่ยนสถานะของมติเดิม + บันทึกว่ามตินั้นถูกอ้างถึงในการประชุมนี้
-    for update in result.updates:
-        target = by_ref.get(update.ref)
-        if target is None:
-            continue
-        segment = segments[update.segment_index] if update.segment_index is not None else None
-        session.add(
-            Proposal(
-                meeting_id=meeting.id,
-                kind="status_change",
-                resolution_id=target.id,
-                proposed_status=update.proposed_status,
-                title=f"เสนอเปลี่ยนสถานะ {target.ref_no} เป็น {update.proposed_status}",
-                evidence_text=update.evidence or (segment.text if segment else ""),
-                evidence_start_ms=segment.start_ms if segment else None,
-                segment_id=segment.id if segment else None,
-                confidence=update.confidence,
+    existing_res_count = len(
+        (
+            await session.execute(
+                select(Resolution).where(Resolution.origin_meeting_id == meeting.id)
             )
+        ).scalars().all()
+    )
+
+    created = 0
+    for i, item in enumerate(result.new_resolutions, start=existing_res_count + 1):
+        segment = segments[item.segment_index] if item.segment_index is not None else None
+        ref = next_ref_no(meeting.sequence_no, meeting.fiscal_year, i)
+
+        res = Resolution(
+            series_id=meeting.series_id,
+            ref_no=ref,
+            origin_meeting_id=meeting.id,
+            origin_segment_id=segment.id if segment else None,
+            origin_agenda_item=f"วาระที่ 4.{i}",
+            text=item.text,
+            category=item.category,
+            status=ResolutionStatus.PROPOSED,
+            due_date=item.due_date,
+            original_due_date=item.due_date,
+            extraction_confidence=item.confidence,
         )
+        session.add(res)
+        await session.flush()
+
+        # Find matching department/person in org
+        if item.assignee_mention and series:
+            needle = item.assignee_mention.strip()
+            dept = (
+                await session.execute(
+                    select(Person).where(
+                        Person.org_id == series.org_id,
+                        Person.full_name.ilike(f"%{needle}%"),
+                    )
+                )
+            ).scalars().first()
+            if dept:
+                session.add(ResolutionAssignee(resolution_id=res.id, person_id=dept.id))
+
         session.add(
             ResolutionLink(
-                resolution_id=target.id,
+                resolution_id=res.id,
                 meeting_id=meeting.id,
-                link_type=LinkType.REFERENCED,
+                link_type=LinkType.CREATED,
                 segment_id=segment.id if segment else None,
-                evidence_text=update.evidence or (segment.text if segment else ""),
-                evidence_start_ms=segment.start_ms if segment else None,
-                confidence=update.confidence,
-            )
-        )
-        created += 1
-
-    #  ข้อเสนอมติใหม่
-    for item in result.new_resolutions:
-        segment = segments[item.segment_index] if item.segment_index is not None else None
-        session.add(
-            Proposal(
-                meeting_id=meeting.id,
-                kind="new_resolution",
-                title=item.text,
                 evidence_text=segment.text if segment else item.text,
                 evidence_start_ms=segment.start_ms if segment else None,
-                segment_id=segment.id if segment else None,
                 confidence=item.confidence,
             )
         )
         created += 1
 
-    created += await _speaker_proposals(session, meeting, segments, result.speakers)
     await session.commit()
     return created
 

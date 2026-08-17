@@ -28,6 +28,8 @@ from app.db.models import (
 )
 
 
+# ── Functions ────────────────────────────────────────────────────────────────
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -139,7 +141,7 @@ async def change_status(
 
     if new_status in (ResolutionStatus.DONE, ResolutionStatus.CANCELLED) and not reason.strip():
         raise HTTPException(
-            status_code=422,  # ชื่อค่าคงที่ของ Starlette เปลี่ยนไปมาระหว่างรุ่น ใช้ตัวเลขตรง ๆ ชัดกว่า
+            status_code=422,
             detail="การปิดหรือยกเลิกมติต้องระบุเหตุผลกำกับเสมอ",
         )
 
@@ -158,7 +160,6 @@ async def change_status(
 
     if meeting_id:
         #  ลิงก์ที่มาจากการยืนยันของคนแทนที่ลิงก์ referenced ที่ระบบสร้างไว้เองในการประชุมเดียวกัน
-        #  ไม่งั้นไทม์ไลน์จะมีหลักฐานท่อนเดียวกันโผล่ซ้ำสองบรรทัด
         dupes = await db.execute(
             select(ResolutionLink).where(
                 ResolutionLink.resolution_id == resolution.id,

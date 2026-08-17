@@ -16,10 +16,12 @@ from app.api.deps import current_actor, current_org
 from app.api.serializers import resolutions_out
 from app.core.config import settings
 from app.db.models import (
+    ActionStatus,
     Meeting,
     MeetingSeries,
     MeetingStatus,
     Organization,
+    OutboundAction,
     Person,
     PersonAlias,
     Proposal,
@@ -40,6 +42,7 @@ from app.schemas import (
     SpeakerPatch,
     UploadAccepted,
 )
+from app.services.agenda_builder import STATUS_LABEL_TH
 from app.services.docx_export import build_minutes_docx
 from app.services.resolutions import (
     audit,
@@ -49,8 +52,10 @@ from app.services.resolutions import (
     set_assignees,
     utcnow,
 )
-from app.services.thai_format import fiscal_year_of
+from app.services.thai_format import fiscal_year_of, thai_date
 from app.workers.tasks import process_meeting_task
+
+# ── Global Variables & Constants ─────────────────────────────────────────────
 
 router = APIRouter(prefix="/meetings", tags=["Meetings"])
 
@@ -61,11 +66,12 @@ MAX_UPLOAD_BYTES = settings.MAX_UPLOAD_MB * 1024 * 1024
 INITIAL_PIPELINE = [
     {"stage": "upload", "state": "pending", "detail": "รับไฟล์และตรวจความสมบูรณ์"},
     {"stage": "asr", "state": "pending", "detail": "ถอดเสียงด้วย AI4Thai ASR"},
-    {"stage": "diarize", "state": "pending", "detail": "แยกผู้พูด"},
-    {"stage": "extract", "state": "pending", "detail": "สกัดมติและจับคู่กับมติเดิมของชุดการประชุม"},
+    {"stage": "extract", "state": "pending", "detail": "สรุปเนื้อหาและสกัดมติ"},
     {"stage": "done", "state": "pending", "detail": "พร้อมให้ตรวจทาน"},
 ]
 
+
+# ── Functions & Route Handlers ───────────────────────────────────────────────
 
 @router.post("", response_model=MeetingOut, status_code=201)
 async def create_meeting(payload: MeetingIn, db: AsyncSession = Depends(get_db)):
@@ -131,7 +137,7 @@ async def upload(
                 out.close()
                 os.remove(target)
                 raise HTTPException(
-                    status_code=413,  # ชื่อค่าคงที่ของ Starlette เปลี่ยนไปมาระหว่างรุ่น ใช้ตัวเลขตรง ๆ ชัดกว่า
+                    status_code=413,
                     detail=f"ไฟล์ใหญ่เกิน {settings.MAX_UPLOAD_MB} MB",
                 )
             out.write(chunk)
@@ -179,11 +185,17 @@ async def retry(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     process_meeting_task.delay(str(meeting.id), meeting.audio_uri, False)
-    return UploadAccepted(meeting_id=meeting.id, status=MeetingStatus.PROCESSING, message="เริ่มประมวลผลใหม่")
+
+    return UploadAccepted(
+        meeting_id=meeting.id,
+        status=MeetingStatus.PROCESSING,
+        message="เริ่มประมวลผลใหม่อีกครั้ง",
+    )
 
 
-@router.get("/{meeting_id}/transcript", response_model=list[SegmentOut])
-async def transcript(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
+@router.get("/{meeting_id}/segments", response_model=list[SegmentOut])
+async def get_segments(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
+    await get_or_404(db, Meeting, meeting_id, "การประชุม")
     rows = await db.execute(
         select(TranscriptSegment)
         .where(TranscriptSegment.meeting_id == meeting_id)
@@ -193,84 +205,79 @@ async def transcript(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/{meeting_id}/speakers", response_model=Ack)
-async def map_speaker(
+async def patch_speaker(
     meeting_id: UUID,
     payload: SpeakerPatch,
     db: AsyncSession = Depends(get_db),
     org: Organization = Depends(current_org),
     actor: str = Depends(current_actor),
 ):
-    """FR-M2-07 · FR-M3-04 — จับคู่ speaker label เข้ากับบุคคลจริง แล้วจำ alias ไว้ถาวร"""
-    await get_or_404(db, Meeting, meeting_id, "การประชุม")
-
-    rows = await db.execute(
-        select(TranscriptSegment).where(
-            TranscriptSegment.meeting_id == meeting_id,
-            TranscriptSegment.speaker_label == payload.speaker_label,
-        )
-    )
-    segments = list(rows.scalars().all())
-    for segment in segments:
-        segment.person_id = payload.person_id
-
-    if payload.person_id and payload.save_alias:
-        await _remember_alias(db, payload.person_id, payload.save_alias, "confirmed_extraction", 0.9)
-        await audit(
-            db, org.id, actor, "confirm_alias", "person", payload.person_id,
-            f'ยืนยัน "{payload.save_alias}" จากการประชุม',
-        )
-
-    await db.commit()
-    return Ack(detail=f"ปรับผู้พูด {len(segments)} ท่อนแล้ว")
-
-
-# ── หน้าตรวจทาน (M9) ────────────────────────────────────────────────────
-
-@router.get("/{meeting_id}/review")
-async def review(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
-    """FR-M9-01 ชุดข้อมูลสำหรับหน้า review รวมทุกอย่างที่ต้องตรวจไว้ในครั้งเดียว"""
+    """
+    FR-M3-04 ระบุตัวตนผู้พูดแทน label SPEAKER_XX
+    และเพิ่ม alias ถาวรลงทะเบียนบุคคลถ้าผู้ใช้ติ๊กให้จำ (FR-M3-05)
+    """
     meeting = await get_or_404(db, Meeting, meeting_id, "การประชุม")
 
-    segments = list(
-        (
-            await db.execute(
-                select(TranscriptSegment)
-                .where(TranscriptSegment.meeting_id == meeting_id)
-                .order_by(TranscriptSegment.start_ms)
+    person = None
+    if payload.person_id:
+        person = await get_or_404(db, Person, payload.person_id, "บุคคล")
+
+    segments = (
+        await db.execute(
+            select(TranscriptSegment).where(
+                TranscriptSegment.meeting_id == meeting.id,
+                TranscriptSegment.speaker_label == payload.speaker_label,
             )
-        ).scalars().all()
-    )
-    proposals = list(
-        (await db.execute(select(Proposal).where(Proposal.meeting_id == meeting_id))).scalars().all()
-    )
-    created = list(
-        (
-            await db.execute(select(Resolution).where(Resolution.origin_meeting_id == meeting_id))
-        ).scalars().all()
-    )
-    closed = list(
-        (
-            await db.execute(select(Resolution).where(Resolution.closed_meeting_id == meeting_id))
-        ).scalars().all()
-    )
+        )
+    ).scalars().all()
 
-    unmapped = sorted({s.speaker_label for s in segments if s.person_id is None})
-    pending = [p for p in proposals if p.decision == "pending"]
+    for seg in segments:
+        seg.person_id = payload.person_id
+        seg.speaker_name = person.full_name if person else None
 
-    return {
-        "meeting": MeetingOut.model_validate(meeting),
-        "segments": [SegmentOut.model_validate(s) for s in segments],
-        "proposals": [ProposalOut.model_validate(p) for p in proposals],
-        "created_resolutions": await resolutions_out(db, created),
-        "closed_resolutions": await resolutions_out(db, closed),
-        "blockers": {
-            "pending_proposals": len(pending),
-            "unmapped_speakers": unmapped,
-        },
-        "can_approve": meeting.status not in (MeetingStatus.PROCESSING, MeetingStatus.FAILED)
-        and not pending
-        and not unmapped,
-    }
+    if payload.save_alias and payload.person_id:
+        alias_clean = payload.save_alias.strip()
+        if alias_clean:
+            dupe = (
+                await db.execute(
+                    select(PersonAlias).where(
+                        PersonAlias.org_id == org.id,
+                        PersonAlias.person_id == payload.person_id,
+                        PersonAlias.alias == alias_clean,
+                    )
+                )
+            ).scalars().first()
+            if not dupe:
+                db.add(
+                    PersonAlias(
+                        org_id=org.id,
+                        person_id=payload.person_id,
+                        alias=alias_clean,
+                        source="manual",
+                        confidence=1.0,
+                    )
+                )
+
+    await audit(
+        db,
+        org.id,
+        actor,
+        "assign_speaker",
+        "meeting",
+        meeting.id,
+        f"{payload.speaker_label} -> {person.full_name if person else 'None'}",
+    )
+    await db.commit()
+    return Ack()
+
+
+@router.get("/{meeting_id}/proposals", response_model=list[ProposalOut])
+async def get_proposals(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
+    await get_or_404(db, Meeting, meeting_id, "การประชุม")
+    rows = await db.execute(
+        select(Proposal).where(Proposal.meeting_id == meeting_id).order_by(Proposal.created_at)
+    )
+    return list(rows.scalars().all())
 
 
 @router.post("/{meeting_id}/proposals/{proposal_id}", response_model=Ack)
@@ -283,134 +290,137 @@ async def decide_proposal(
     actor: str = Depends(current_actor),
 ):
     """
-    ตัดสินข้อเสนอของระบบ — จุดที่ human-in-the-loop เกิดขึ้นจริง
-    ไม่มีทางอื่นที่ทำให้ข้อเสนอมีผลได้นอกจากผ่าน endpoint นี้
+    FR-M3-03 มนุษย์ตัดสินใจว่าจะเอาตามที่ AI เสนอไหม
+
+    ถ้ากดรับ:
+      - proposal เปลี่ยนเป็น approved
+      - สร้าง Resolution ใหม่จริง / เปลี่ยนสถานะมติเดิมจริง / ผูก speaker จริง
+    ถ้าปฏิเสธ:
+      - proposal เปลี่ยนเป็น rejected ไม่เกิดผลข้างเคียงใด ๆ ต่อ DB (FR-M3-03)
     """
     meeting = await get_or_404(db, Meeting, meeting_id, "การประชุม")
-    proposal = await get_or_404(db, Proposal, proposal_id, "ข้อเสนอ")
+    proposal = await get_or_404(db, Proposal, proposal_id, "ข้อเสนอของระบบ")
     if proposal.meeting_id != meeting.id:
-        raise HTTPException(status_code=400, detail="ข้อเสนอนี้ไม่ได้อยู่ในการประชุมที่ระบุ")
-    if proposal.decision != "pending":
-        raise HTTPException(status_code=409, detail="ข้อเสนอนี้ถูกตัดสินไปแล้ว")
+        raise HTTPException(status_code=400, detail="proposal นี้ไม่ได้มาจากการประชุมนี้")
+    if proposal.status != "pending":
+        raise HTTPException(status_code=409, detail=f"proposal นี้ถูกตัดสินไปแล้ว ({proposal.status})")
 
-    if payload.decision == "rejected":
-        proposal.decision = "rejected"
-        await db.commit()
-        return Ack(detail="ปฏิเสธข้อเสนอแล้ว")
+    proposal.status = payload.action
+    proposal.decided_by = actor
+    proposal.decided_at = utcnow()
+    proposal.decision_reason = payload.override_reason
 
-    if proposal.kind == "status_change" and proposal.resolution_id and proposal.proposed_status:
-        resolution = await get_or_404(db, Resolution, proposal.resolution_id, "มติ")
-        await change_status(
-            db,
-            resolution,
-            proposal.proposed_status,
-            reason="ยืนยันจากรายงานในที่ประชุม",
-            actor=actor,
-            meeting_id=meeting.id,
-            evidence=proposal.evidence_text,
-            evidence_start_ms=proposal.evidence_start_ms,
-            segment_id=proposal.segment_id,
-        )
+    data = dict(proposal.payload or {})
 
-    elif proposal.kind == "new_resolution":
-        count = len(
-            (
-                await db.execute(select(Resolution).where(Resolution.origin_meeting_id == meeting.id))
+    if payload.action == "approved":
+        ptype = proposal.proposal_type
+
+        if ptype == "new_resolution":
+            res_count = (
+                await db.execute(
+                    select(Resolution).where(Resolution.origin_meeting_id == meeting.id)
+                )
             ).scalars().all()
-        )
-        resolution = Resolution(
-            series_id=meeting.series_id,
-            ref_no=next_ref_no(meeting.sequence_no, meeting.fiscal_year, count + 1),
-            origin_meeting_id=meeting.id,
-            origin_segment_id=proposal.segment_id,
-            origin_agenda_item=f"วาระที่ 4.{count + 1}",
-            text=(payload.text or proposal.title).strip(),
-            status=ResolutionStatus.PROPOSED,
-            due_date=payload.due_date,
-            original_due_date=payload.due_date,
-            extraction_confidence=proposal.confidence,
-        )
-        db.add(resolution)
-        await db.flush()
-        if payload.assignee_ids:
-            await set_assignees(db, resolution, payload.assignee_ids)
-        db.add(
-            ResolutionLink(
-                resolution_id=resolution.id,
+            item_no = len(res_count) + 1
+            ref = next_ref_no(meeting.sequence_no, meeting.fiscal_year, item_no)
+            res = Resolution(
+                series_id=meeting.series_id,
+                origin_meeting_id=meeting.id,
+                ref_no=ref,
+                text=payload.override_text or data.get("text") or "",
+                category=data.get("category") or "other",
+                status=ResolutionStatus.PROPOSED,
+                due_date=date.fromisoformat(payload.override_due_date) if payload.override_due_date else None,
+                confidence_score=proposal.confidence_score,
+            )
+            db.add(res)
+            await db.flush()
+
+            assignee_ids = payload.override_assignee_ids
+            if assignee_ids is None and data.get("suggested_person_id"):
+                assignee_ids = [UUID(data["suggested_person_id"])]
+            if assignee_ids:
+                await set_assignees(db, res, assignee_ids)
+
+            db.add(
+                ResolutionLink(
+                    resolution_id=res.id,
+                    meeting_id=meeting.id,
+                    link_type=LinkType.CREATED,
+                    segment_id=UUID(data["segment_id"]) if data.get("segment_id") else None,
+                    evidence_text=data.get("text") or "",
+                    evidence_start_ms=data.get("start_ms"),
+                    confidence=proposal.confidence_score,
+                )
+            )
+
+        elif ptype == "update_resolution":
+            target_id = proposal.target_resolution_id
+            if not target_id:
+                raise HTTPException(status_code=400, detail="proposal ประเภทนี้ต้องมี target_resolution_id")
+            target = await get_or_404(db, Resolution, target_id, "มติเป้าหมาย")
+            new_status = payload.override_status or data.get("proposed_status") or "in_progress"
+            await change_status(
+                db,
+                target,
+                new_status=new_status,
+                reason=payload.override_reason or data.get("evidence") or "ยืนยันจาก proposal",
+                actor=actor,
                 meeting_id=meeting.id,
-                link_type="created",
-                segment_id=proposal.segment_id,
-                evidence_text=proposal.evidence_text,
-                evidence_start_ms=proposal.evidence_start_ms,
-                confidence=proposal.confidence,
-            )
-        )
-
-    elif proposal.kind == "speaker_identity":
-        if not payload.person_id:
-            raise HTTPException(status_code=422, detail="ต้องระบุว่าผู้พูดคนนี้คือใครก่อนยืนยัน")
-        rows = await db.execute(
-            select(TranscriptSegment).where(
-                TranscriptSegment.meeting_id == meeting.id,
-                TranscriptSegment.speaker_label == proposal.speaker_label,
-            )
-        )
-        for segment in rows.scalars().all():
-            segment.person_id = payload.person_id
-        if payload.save_alias:
-            await _remember_alias(
-                db, payload.person_id, payload.save_alias, "confirmed_extraction", proposal.confidence
+                evidence=data.get("evidence"),
+                evidence_start_ms=data.get("start_ms"),
+                segment_id=UUID(data["segment_id"]) if data.get("segment_id") else None,
             )
 
-    proposal.decision = "accepted"
-    await audit(db, org.id, actor, "accept_proposal", "proposal", proposal.id, proposal.kind)
+        elif ptype == "speaker_alias":
+            person_id = payload.override_assignee_ids[0] if payload.override_assignee_ids else None
+            if not person_id and data.get("suggested_person_id"):
+                person_id = UUID(data["suggested_person_id"])
+            if person_id and data.get("speaker_label"):
+                await patch_speaker(
+                    meeting.id,
+                    SpeakerPatch(
+                        speaker_label=data["speaker_label"],
+                        person_id=person_id,
+                        save_alias=data.get("name_mention"),
+                    ),
+                    db=db,
+                    org=org,
+                    actor=actor,
+                )
+
+    await audit(
+        db,
+        org.id,
+        actor,
+        f"decide_proposal_{payload.action}",
+        "proposal",
+        proposal.id,
+        payload.override_reason or "",
+    )
     await db.commit()
-    return Ack(detail="ยืนยันข้อเสนอแล้ว")
+    return Ack()
 
 
 @router.post("/{meeting_id}/approve", response_model=MeetingOut)
-async def approve(
+async def approve_meeting(
     meeting_id: UUID,
     db: AsyncSession = Depends(get_db),
     org: Organization = Depends(current_org),
     actor: str = Depends(current_actor),
 ):
     """
-    FR-M9-03 รับรองรายงานการประชุม
-    เป็นจุดเดียวที่ระบบเปลี่ยนสถานะมติเองได้ คือ proposed → confirmed (§4.1)
+    FR-M9-01 ถึง 04 การรับรองรายงานการประชุม (จุดตัดสำคัญของกระบวนการ)
+
+    เมื่อรับรอง:
+      1. มติสถานะ proposed ทั้งหมดใน meeting นี้ กลายเป็น confirmed ทันที (FR-M9-02)
+      2. meeting เปลี่ยนสถานะเป็น approved
+      3. ปลดล็อกให้สร้างร่างวาระครั้งถัดไปและส่งอีเมลแจ้งเตือนได้ (FR-M9-03)
+      4. บันทึกลง AuditLog (FR-M9-04)
     """
     meeting = await get_or_404(db, Meeting, meeting_id, "การประชุม")
 
-    if meeting.status in (MeetingStatus.PROCESSING, MeetingStatus.FAILED):
-        raise HTTPException(status_code=409, detail="ยังประมวลผลไม่เสร็จหรือประมวลผลไม่สำเร็จ")
-
-    pending = (
-        await db.execute(
-            select(Proposal).where(Proposal.meeting_id == meeting.id, Proposal.decision == "pending")
-        )
-    ).scalars().all()
-    if pending:
-        raise HTTPException(
-            status_code=409, detail=f"ยังมีข้อเสนอรอการตรวจอีก {len(pending)} รายการ"
-        )
-
-    unmapped = (
-        await db.execute(
-            select(TranscriptSegment.speaker_label)
-            .where(TranscriptSegment.meeting_id == meeting.id, TranscriptSegment.person_id.is_(None))
-            .distinct()
-        )
-    ).scalars().all()
-    if unmapped:
-        raise HTTPException(
-            status_code=409, detail=f"ยังมีผู้พูดที่ยังไม่ได้ระบุตัวอีก {len(unmapped)} คน"
-        )
-
-    meeting.status = MeetingStatus.APPROVED
-    meeting.approved_at = utcnow()
-    meeting.approved_by = actor
-
-    proposed = (
+    proposed_res = (
         await db.execute(
             select(Resolution).where(
                 Resolution.origin_meeting_id == meeting.id,
@@ -418,113 +428,129 @@ async def approve(
             )
         )
     ).scalars().all()
-    for resolution in proposed:
+
+    for res in proposed_res:
         await change_status(
             db,
-            resolution,
+            res,
             ResolutionStatus.CONFIRMED,
-            reason="ที่ประชุมรับรองรายงานการประชุม",
+            reason=f"รับรองรายงานการประชุมครั้งที่ {meeting.sequence_no}/{meeting.fiscal_year}",
             actor=actor,
             meeting_id=meeting.id,
-            system_initiated=True,
         )
 
-    await audit(
-        db, org.id, actor, "meeting_approved", "meeting", meeting.id,
-        f"รับรองรายงานครั้งที่ {meeting.sequence_no}/{meeting.fiscal_year}",
-    )
-    await db.commit()
-    await db.refresh(meeting)
-    return meeting
+    meeting.status = MeetingStatus.APPROVED
+    meeting.approved_by = actor
+    meeting.approved_at = utcnow()
 
+    # ── สร้างอีเมลสรุปสาระสำคัญและมติเข้าคิวส่งออก (Outbound Action) ─────────
+    series = await db.get(MeetingSeries, meeting.series_id)
+    series_name = series.name if series else "การประชุม"
 
-@router.get("/{meeting_id}/export")
-async def export_minutes(meeting_id: UUID, format: str = "docx", db: AsyncSession = Depends(get_db)):
-    """FR-M5-05 รายงานการประชุมฉบับเต็มเป็น .docx ตาม template"""
-    if format != "docx":
-        raise HTTPException(status_code=400, detail="รองรับเฉพาะ format=docx")
+    meeting_resolutions = (
+        await db.execute(
+            select(Resolution)
+            .where(Resolution.origin_meeting_id == meeting.id)
+            .order_by(Resolution.ref_no)
+        )
+    ).scalars().all()
 
-    meeting = await get_or_404(db, Meeting, meeting_id, "การประชุม")
-    series = await get_or_404(db, MeetingSeries, meeting.series_id, "ชุดการประชุม")
-
-    segments = list(
-        (
-            await db.execute(
-                select(TranscriptSegment)
-                .where(TranscriptSegment.meeting_id == meeting_id)
-                .order_by(TranscriptSegment.start_ms)
-            )
-        ).scalars().all()
-    )
-    people = {
-        p.id: p for p in (await db.execute(select(Person))).scalars().all()
-    }
-    resolutions = list(
-        (
-            await db.execute(select(Resolution).where(Resolution.origin_meeting_id == meeting_id))
-        ).scalars().all()
-    )
-
-    attendee_ids = list(dict.fromkeys(s.person_id for s in segments if s.person_id))
-    attendees = [
-        f"{people[pid].full_name} {people[pid].position}".strip() for pid in attendee_ids if pid in people
-    ]
-
-    resolution_rows = []
-    for r in resolutions:
-        names = (
+    res_rows = []
+    for r in meeting_resolutions:
+        assignees = (
             await db.execute(
                 select(Person)
                 .join(ResolutionAssignee, ResolutionAssignee.person_id == Person.id)
                 .where(ResolutionAssignee.resolution_id == r.id)
             )
         ).scalars().all()
-        resolution_rows.append(
-            {
-                "title": r.text[:60],
-                "text": r.text,
-                "assignees": ", ".join(p.full_name for p in names),
-                "due_date": r.due_date,
-            }
-        )
+        res_rows.append({
+            "text": r.text,
+            "assignees": ", ".join(p.full_name for p in assignees) or "-",
+            "due_date": thai_date(r.due_date) if r.due_date else "-",
+            "status": STATUS_LABEL_TH.get(r.status, r.status),
+        })
 
-    blob = build_minutes_docx(
+    summary_text = getattr(meeting, "summary", None) or meeting.title or "สรุปสาระสำคัญจากการประชุม"
+    body_text = (
+        f"สรุปสาระสำคัญจากการประชุม{series_name} ครั้งที่ {meeting.sequence_no}/{meeting.fiscal_year}\n"
+        f"เมื่อวันที่ {thai_date(meeting.meeting_date)}:\n\n"
+        f"{summary_text}"
+    )
+
+    recipient = (
+        await db.execute(
+            select(Person).where(
+                Person.org_id == org.id,
+                Person.is_department == False,
+                Person.email.is_not(None),
+            )
+        )
+    ).scalars().first()
+
+    db.add(
+        OutboundAction(
+            series_id=meeting.series_id,
+            meeting_id=meeting.id,
+            action_type="send_meeting_summary_email",
+            recipient_person_id=recipient.id if recipient else None,
+            subject=f"สรุปสาระสำคัญและมติการประชุม{series_name} ครั้งที่ {meeting.sequence_no}/{meeting.fiscal_year}",
+            body=body_text,
+            payload={"rows": res_rows},
+            status=ActionStatus.PENDING_APPROVAL,
+            scheduled_for=utcnow(),
+        )
+    )
+
+    await audit(db, org.id, actor, "approve_meeting", "meeting", meeting.id, f"ครั้งที่ {meeting.sequence_no}")
+    await db.commit()
+    await db.refresh(meeting)
+    return meeting
+
+
+@router.get("/{meeting_id}/export")
+async def export_minutes_docx(meeting_id: UUID, db: AsyncSession = Depends(get_db)):
+    """FR-M5-05 ส่งออกรายงานการประชุมเป็น .docx ตามรูปแบบราชการ"""
+    meeting = await get_or_404(db, Meeting, meeting_id, "การประชุม")
+    series = await get_or_404(db, MeetingSeries, meeting.series_id, "ชุดการประชุม")
+
+    speakers = (
+        await db.execute(
+            select(TranscriptSegment.speaker_name)
+            .where(TranscriptSegment.meeting_id == meeting.id)
+            .distinct()
+        )
+    ).scalars().all()
+    attendees = [s for s in speakers if s]
+
+    resolutions = await resolutions_out(db, select(Resolution).where(Resolution.origin_meeting_id == meeting.id))
+
+    res_dicts = [
+        {
+            "ref_no": r.ref_no,
+            "text": r.text,
+            "category": r.category,
+            "due_date": r.due_date,
+            "assignees": ", ".join(r.assignee_names),
+        }
+        for r in resolutions
+    ]
+
+    content = build_minutes_docx(
         series_name=series.name,
-        fiscal_year=meeting.fiscal_year,
         sequence_no=meeting.sequence_no,
+        fiscal_year=meeting.fiscal_year,
         meeting_date=meeting.meeting_date,
         attendees=attendees,
-        resolutions=resolution_rows,
-        segments=[
-            {
-                "start_ms": s.start_ms,
-                "speaker": people[s.person_id].full_name if s.person_id in people else s.speaker_label,
-                "text": s.text,
-            }
-            for s in segments
-        ],
+        summary=meeting.summary or "",
+        key_points=meeting.key_points or [],
+        resolutions=res_dicts,
         template_path=settings.MINUTES_TEMPLATE_PATH or None,
     )
 
-    filename = f"minutes-{meeting.sequence_no}-{meeting.fiscal_year}.docx"
+    filename = f"minutes_{series.id}_{meeting.sequence_no}.docx"
     return Response(
-        content=blob,
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-
-async def _remember_alias(
-    db: AsyncSession, person_id: UUID, alias: str, source: str, confidence: float
-) -> None:
-    alias = alias.strip()
-    if not alias:
-        return
-    exists = (
-        await db.execute(
-            select(PersonAlias).where(PersonAlias.person_id == person_id, PersonAlias.alias == alias)
-        )
-    ).scalars().first()
-    if exists:
-        return
-    db.add(PersonAlias(person_id=person_id, alias=alias, source=source, confidence=confidence))
