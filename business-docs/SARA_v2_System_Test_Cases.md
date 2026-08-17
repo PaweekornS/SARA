@@ -970,12 +970,12 @@ docker compose exec celery_worker python -c "from app.workers.tasks import scan_
 **ขั้นตอน:** สร้างรายการเตือนสำหรับมติที่มีผู้รับผิดชอบ 2 คน → ดูคิว
 **ผลที่ต้องได้:** เกิด **2 รายการแยกกัน** คนละฉบับ ไม่ใช่ 1 ฉบับส่ง cc — เนื้อหาต้องเจาะจงต่อคน
 
-### TC-M7-16 · **magic link เปิดได้โดยไม่ต้องล็อกอิน** [P1] FR-M7-08 ⚠
+### TC-M7-16 · **magic link เปิดได้โดยไม่ต้องล็อกอิน** [P1] FR-M7-08
 **ขั้นตอน:**
 1. หาลิงก์จากเนื้อความของรายการส่งออก (ในหน้า "คิวส่งออก" กด "ดูเนื้อหาที่จะส่งทั้งหมด")
 2. คัดลอก URL ไปเปิดใน **หน้าต่างไม่ระบุตัวตน**
 **ผลที่ต้องได้:** เห็นหน้าเว็บภาษาไทยที่แสดงข้อความมติคำต่อคำ · กำหนดแล้วเสร็จ (เลขไทย) · จำนวนวันที่เกิน · สถานะปัจจุบัน · ปุ่ม 2 ปุ่ม
-**⚠ ดู §19 ข้อ 1 — คาดว่าเคสนี้จะ 404 เพราะ URL ที่สร้างขาด `/api`** ให้ทดสอบต่อโดยเติม `/api` เข้าไปเอง: `http://localhost:8000/api/public/resolutions/<token>`
+ลิงก์ต้องอยู่ในรูป `http://localhost:8000/api/public/resolutions/<token>` และเปิดได้ทันทีโดยไม่ต้องแก้ URL เอง
 
 ### TC-M7-17 · **magic link ปิดมติไม่ได้** [P0] §4.2 ⭐
 **ขั้นตอน:** ดูหน้า magic link
@@ -1254,9 +1254,38 @@ docker compose exec celery_worker python -c "from app.workers.tasks import scan_
 
 ### TC-REG-01 · unit test ฝั่ง backend [P1]
 ```bash
-docker compose exec backend python -m unittest discover -s tests
+# ฐานข้อมูลสำหรับทดสอบ แยกจากฐานของจริง — ทำครั้งเดียว
+docker run -d --name sara_test_db -e POSTGRES_PASSWORD=postgrespassword     -e POSTGRES_DB=sara_test -p 55432:5432 postgres:15-alpine
+
+cd backend && python -m unittest discover -s tests
 ```
-**ผลที่ต้องได้:** `OK` · 24 เคส · ครอบคลุม state machine · การคำนวณวันเกินกำหนด · การจัดรูปวันที่ไทย · ตัวกรองข้อเสนอ
+**ผลที่ต้องได้:** `OK` · **244 เคส** · ใช้เวลาราว 3 นาที
+
+| ไฟล์ | เคส | ครอบคลุม |
+|---|---|---|
+| `test_services.py` | 64 | state machine · วันที่/เลขไทย · magic token · ตัวกรองผลจากโมเดล · entity resolution · ไฟล์ .docx |
+| `test_api_registry.py` | 53 | M1 ชุดการประชุม · M3 ทะเบียนบุคคล · M6 แดชบอร์ด · M8 ถาม-ตอบ · bootstrap · หัวข้อ X-Actor ภาษาไทย |
+| `test_api_lifecycle.py` | 51 | M2 นำเข้าไฟล์ · M9 ตรวจทาน/รับรอง · M4 วงจรชีวิตมติ (ไล่ state machine ครบทุกช่อง) |
+| `test_api_output.py` | 45 | M5 ร่างวาระ + export .docx · M7 คิวส่งออก · magic link |
+| `test_workers.py` | 31 | pipeline เบื้องหลัง · scheduler · การส่งออกผ่าน MCP |
+
+**ไม่มีเคสไหนเรียกบริการภายนอกจริง** — AI4Thai, SMTP และ Redis ถูกแทนที่ทั้งหมด จึงรันซ้ำได้เสมอโดยไม่เสียเงินและไม่ต้องต่อเน็ต
+
+### TC-REG-01b · เคสที่เฝ้าหลักการ "ห้ามละเมิด" [P0]
+เคสเหล่านี้คือด่านสุดท้ายก่อนส่งงาน ถ้าข้อใดแดง แปลว่าหลักการใน requirement ถูกละเมิดในโค้ดแล้ว
+
+| เคส | หลักการ |
+|---|---|
+| `PipelineFailures.test_simulated_asr_failure_halts_and_stores_nothing` | FR-M2-04 · ASR ล้ม = 0 ท่อน 0 ข้อเสนอในฐานข้อมูล |
+| `PipelineFailures.test_llm_failure_keeps_the_real_transcript_but_stops_the_pipeline` | FR-M2-04 · ไม่เดินต่อด้วยมติที่ไม่ได้สกัดจริง |
+| `SystemInitiatedChanges.test_system_cannot_close_a_resolution` | FR-M4-06 · ระบบปิดมติเองไม่ได้ |
+| `ReviewAndApprove.test_approving_never_closes_a_resolution_by_itself` | FR-M4-06 · รับรองรายงานเปลี่ยนได้แค่ proposed → confirmed |
+| `PipelineSuccess.test_extraction_output_lands_as_proposals_not_as_facts` | §4.2 · โมเดลเสนอได้อย่างเดียว |
+| `PipelineSuccess.test_uncertain_speaker_becomes_a_question_not_a_guess` | §12 · ไม่เดาชื่อคนไทย |
+| `ResolutionLifecycle.test_every_forbidden_transition_is_409` | §4.1 · ไล่ทุกคู่สถานะที่ต้องถูกปฏิเสธ |
+| `AgendaGeneration.test_generate_is_blocked_by_unapproved_meetings` | FR-M9-04 · ห้ามสร้างวาระจากรายงานที่ยังไม่รับรอง |
+| `OutboundQueue.test_queued_actions_start_as_pending_approval` | FR-M7-07 · ทุก action ต้องผ่านการอนุมัติ |
+| `MagicLink.test_page_offers_only_progress_reporting_never_closing` | §4.2 · ปิดมติผ่านลิงก์ไม่ได้ |
 
 ### TC-REG-02 · type check ฝั่ง frontend [P1]
 ```bash
@@ -1300,13 +1329,16 @@ docker compose exec backend alembic check
 
 รายการนี้ระบุไว้ล่วงหน้าเพื่อไม่ให้เสียเวลาไล่หาสาเหตุ
 
-### 19.1 ข้อบกพร่องที่พบจากการทบทวนโค้ดขณะเขียนเอกสารนี้
+### 19.1 ข้อบกพร่องที่พบและแก้ไขแล้ว
 
-| # | เรื่อง | ผลกระทบ | ที่อยู่ |
+พบระหว่างทบทวนโค้ดและตอนเขียน unit test — **แก้แล้วทั้งหมด** พร้อมเคสอัตโนมัติกันไม่ให้กลับมาอีก
+
+| # | เรื่อง | ผลกระทบเดิม | เคสที่เฝ้าไว้ |
 |---|---|---|---|
-| **1** | **URL ของ magic link ขาด `/api`** — `magic_link_url()` คืน `{PUBLIC_BASE_URL}/public/resolutions/{token}` แต่ router ถูก mount ที่ `/api` ทำให้ที่อยู่จริงคือ `/api/public/resolutions/{token}` | ลิงก์ในอีเมลที่ส่งถึงผู้รับผิดชอบจะ **404** · FR-M7-08 ใช้งานจริงไม่ได้ | `backend/app/core/security.py:71` |
-
-แก้ได้ด้วยการเติม `/api` ในบรรทัดเดียว — ยังไม่ได้แก้เพราะอยู่นอกขอบเขตของงานเขียนเอกสารทดสอบ
+| 1 | **URL ของ magic link ขาด `/api`** — `magic_link_url()` คืน `{PUBLIC_BASE_URL}/public/resolutions/{token}` แต่ router ถูก mount ใต้ `/api` | ลิงก์ในอีเมลถึงผู้รับผิดชอบ **404** · FR-M7-08 ใช้งานจริงไม่ได้ | `MagicLink.test_generated_url_points_at_a_route_that_exists` |
+| 2 | **Stored XSS ในหน้า magic link** — ข้อความมติและชื่อบุคคลถูกต่อเป็น HTML โดยไม่ escape | ใครแก้ข้อความมติเป็น `<script>` ได้ สคริปต์จะรันในเบราว์เซอร์ผู้รับที่เปิดจากอีเมล | `MagicLink.test_html_in_resolution_text_is_escaped` |
+| 3 | **ตารางสรุปวาระเรียงผู้รับผิดชอบคนละแบบกับตัวเอกสาร** | เอกสารเดียวกันแสดงลำดับชื่อไม่ตรงกันสองที่ | `AgendaEditingAndExport.test_agenda_summary_rows` |
+| 4 | **Swagger UI ถูกย้ายไป `/api/docs`** โดยไม่จำเป็น | `/docs` ที่คนคุ้นเคยตอบ 404 | `TC-SMK-02` |
 
 ### 19.2 สิ่งที่ยังไม่ได้ทำตามที่ระบุใน README
 
@@ -1327,7 +1359,7 @@ docker compose exec backend alembic check
 
 | เรื่อง | เหตุผล |
 |---|---|
-| การสกัดมติด้วย LLM จริง | ยังไม่เคยรันกับ AI4Thai API key จริง — มีแต่ unit test ของชั้น mapping/filter · **TS-M2 และ TS-M4 คือการตรวจสอบครั้งแรก** |
+| **คุณภาพการสกัดมติของโมเดลจริง** | unit test ครอบคลุม pipeline และตัวกรองครบแล้ว แต่ตัวโมเดล AI4Thai ถูกแทนที่ในเทส · **TS-M2 และ TS-M4 คือการวัดคุณภาพการสกัดจริงครั้งแรก** |
 | การแสดงผลบนมือถือ | ยังไม่เคยตรวจ |
 | การใช้งานด้วยคีย์บอร์ดและ screen reader | ยังไม่เคยตรวจ |
 | ประสิทธิภาพเมื่อมีมติหลักร้อยข้อ | ยังไม่เคยตรวจ · `/api/bootstrap` ดึงทั้ง org มาก้อนเดียว อาจต้องแตกเป็น endpoint ย่อยเมื่อข้อมูลโตเกิน pilot |

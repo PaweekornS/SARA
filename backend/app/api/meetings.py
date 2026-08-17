@@ -131,7 +131,7 @@ async def upload(
                 out.close()
                 os.remove(target)
                 raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    status_code=413,  # ชื่อค่าคงที่ของ Starlette เปลี่ยนไปมาระหว่างรุ่น ใช้ตัวเลขตรง ๆ ชัดกว่า
                     detail=f"ไฟล์ใหญ่เกิน {settings.MAX_UPLOAD_MB} MB",
                 )
             out.write(chunk)

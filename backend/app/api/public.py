@@ -7,12 +7,14 @@ FR-M7-08 — ผู้รับผิดชอบแจ้งสถานะม�
 
 from __future__ import annotations
 
+from html import escape
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.security import read_magic_token
 from app.db.models import Person, Resolution, ResolutionStatus
 from app.db.session import get_db
@@ -51,6 +53,14 @@ def _page(content: str, status_code: int = 200) -> HTMLResponse:
     return HTMLResponse(PAGE.format(content=content), status_code=status_code)
 
 
+def esc(value) -> str:
+    """
+    ข้อความมติและชื่อบุคคลแก้ไขได้จากในระบบ จึงเป็นข้อมูลที่เชื่อไม่ได้เมื่อเอามาต่อเป็น HTML
+    หน้านี้เปิดจากอีเมลโดยไม่ต้องล็อกอิน สคริปต์ที่หลุดเข้ามาจะรันในเบราว์เซอร์ของผู้รับทันที
+    """
+    return escape(str(value), quote=True)
+
+
 async def _load(token: str, db: AsyncSession) -> tuple[Resolution, Person]:
     data = read_magic_token(token)
     if not data:
@@ -67,20 +77,21 @@ async def show(token: str, db: AsyncSession = Depends(get_db)):
     try:
         resolution, person = await _load(token, db)
     except HTTPException as err:
-        return _page(f'<p class="err">{err.detail}</p>', err.status_code)
+        return _page(f'<p class="err">{esc(err.detail)}</p>', err.status_code)
 
     od = overdue_days(resolution)
     buttons = "".join(
-        f'<button type="submit" name="status" value="{key}">{label}</button>' for key, label in ALLOWED.items()
+        f'<button type="submit" name="status" value="{key}">{esc(label)}</button>'
+        for key, label in ALLOWED.items()
     )
     return _page(
         f"<h2>แจ้งความคืบหน้ามติ</h2>"
-        f'<p class="meta">เรียน {person.full_name}</p>'
-        f'<div class="quote">{resolution.text}</div>'
-        f'<p class="meta">{resolution.ref_no} · กำหนดแล้วเสร็จ {thai_date(resolution.due_date)}'
+        f'<p class="meta">เรียน {esc(person.full_name)}</p>'
+        f'<div class="quote">{esc(resolution.text)}</div>'
+        f'<p class="meta">{esc(resolution.ref_no)} · กำหนดแล้วเสร็จ {esc(thai_date(resolution.due_date))}'
         f'{f" · เกินกำหนดแล้ว {od} วัน" if od else ""}<br/>'
-        f"สถานะปัจจุบัน: {STATUS_LABEL_TH.get(resolution.status, resolution.status)}</p>"
-        f'<form method="post" action="/api/public/resolutions/{token}">'
+        f"สถานะปัจจุบัน: {esc(STATUS_LABEL_TH.get(resolution.status, resolution.status))}</p>"
+        f'<form method="post" action="{settings.API_V1_STR}/public/resolutions/{esc(token)}">'
         f'<p><textarea name="note" placeholder="รายละเอียดความคืบหน้า (ไม่บังคับ)"></textarea></p>'
         f"<p>{buttons}</p></form>"
         f'<p class="meta">หากดำเนินการแล้วเสร็จ กรุณาแจ้งฝ่ายเลขานุการ '
@@ -98,7 +109,7 @@ async def submit(
     try:
         resolution, person = await _load(token, db)
     except HTTPException as err:
-        return _page(f'<p class="err">{err.detail}</p>', err.status_code)
+        return _page(f'<p class="err">{esc(err.detail)}</p>', err.status_code)
 
     if status not in ALLOWED:
         return _page('<p class="err">สถานะที่เลือกไม่ถูกต้อง</p>', 422)
@@ -112,12 +123,12 @@ async def submit(
             actor=f"{person.full_name} (ผ่าน magic link)",
         )
     except HTTPException as err:
-        return _page(f'<p class="err">{err.detail}</p>', err.status_code)
+        return _page(f'<p class="err">{esc(err.detail)}</p>', err.status_code)
 
     await db.commit()
     return _page(
         f'<h2 class="ok">บันทึกเรียบร้อยแล้ว</h2>'
-        f"<p>ระบบบันทึกสถานะ “{ALLOWED[status]}” สำหรับ {resolution.ref_no} แล้ว "
+        f"<p>ระบบบันทึกสถานะ “{esc(ALLOWED[status])}” สำหรับ {esc(resolution.ref_no)} แล้ว "
         f"ฝ่ายเลขานุการจะเห็นการแจ้งนี้ในระบบทันที</p>"
         f'<p class="meta">ขอบคุณครับ/ค่ะ</p>'
     )

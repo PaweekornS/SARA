@@ -135,7 +135,7 @@ async def generate_agenda(db: AsyncSession, series: MeetingSeries, today: date |
     meeting_by_id = {m.id: m for m in meetings}
 
     for i, r in enumerate(open_resolutions, start=1):
-        names = await _assignee_names(db, r.id)
+        names = await assignee_names(db, r.id)
         origin = meeting_by_id.get(r.origin_meeting_id)
         od = overdue_days(r, today)
         lines = [
@@ -161,7 +161,7 @@ async def generate_agenda(db: AsyncSession, series: MeetingSeries, today: date |
     return draft
 
 
-async def _assignee_names(db: AsyncSession, resolution_id: UUID) -> list[str]:
+async def assignee_names(db: AsyncSession, resolution_id: UUID) -> list[str]:
     rows = await db.execute(
         select(Person)
         .join(ResolutionAssignee, ResolutionAssignee.person_id == Person.id)

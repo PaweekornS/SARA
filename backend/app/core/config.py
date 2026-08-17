@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     PATHUMMA_BASE_URL: str = "https://tokenmind.pathumma.in.th/v1"
     PATHUMMA_MODEL_NAME: str = "thaillm-8b"
     LLM_TIMEOUT_SECONDS: int = 180
+    #  thaillm-8b ปฏิเสธคำขอที่เกิน context นี้ทั้งคำขอ (ตัวเลขจาก error ของ gateway เอง)
+    #  บันทึกยาวจึงต้องถูกแบ่งส่งเป็นช่วง ๆ — ดู services/extraction.py
+    LLM_CONTEXT_TOKENS: int = 40960
+    LLM_RESPONSE_RESERVE_TOKENS: int = 4096
 
     # ASR
     ASR_URL: str = "https://tokenmind.pathumma.in.th"
