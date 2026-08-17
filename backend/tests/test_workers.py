@@ -321,10 +321,11 @@ class DueScanner(DbCase):
         self.assertGreater(first, 0)
         self.assertEqual(second, 0)
 
-    async def test_resolutions_beyond_the_lead_window_are_not_queued(self):
+    async def test_resolutions_not_overdue_are_not_queued(self):
+        """มติที่ยังไม่เกินกำหนดจะไม่ถูกส่งเข้าคิวส่งออก"""
         async with self.sessionmaker() as s:
             row = await s.get(m.Resolution, self.f.open_res.id)
-            row.due_date = date.today() + timedelta(days=settings.REMINDER_LEAD_DAYS + 30)
+            row.due_date = date.today() + timedelta(days=2)
             await s.commit()
         await tasks._scan_due()
         self.assertEqual(await self.count(m.OutboundAction, resolution_id=self.f.open_res.id), 0)

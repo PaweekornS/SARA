@@ -40,6 +40,7 @@ from app.db.models import (
 )
 from app.services import extraction
 from app.services.asr import AsrError, Transcript, load_transcript_file, transcribe_audio
+from app.services.llm import LlmError
 from app.services.resolutions import next_ref_no, overdue_days, utcnow
 from app.services.thai_format import thai_date
 
@@ -237,6 +238,13 @@ async def _extract_and_link(
         segment = segments[item.segment_index] if item.segment_index is not None else None
         ref = next_ref_no(meeting.sequence_no, meeting.fiscal_year, i)
 
+        parsed_due_date = None
+        if item.due_date:
+            try:
+                parsed_due_date = date.fromisoformat(item.due_date) if isinstance(item.due_date, str) else item.due_date
+            except (ValueError, TypeError):
+                parsed_due_date = None
+
         res = Resolution(
             series_id=meeting.series_id,
             ref_no=ref,
@@ -246,8 +254,8 @@ async def _extract_and_link(
             text=item.text,
             category=item.category,
             status=ResolutionStatus.PROPOSED,
-            due_date=item.due_date,
-            original_due_date=item.due_date,
+            due_date=parsed_due_date,
+            original_due_date=parsed_due_date,
             extraction_confidence=item.confidence,
         )
         session.add(res)
@@ -404,7 +412,7 @@ async def _send_action(action_id: UUID, task) -> dict:
 
 @celery_app.task(name="scan_due_resolutions")
 def scan_due_resolutions():
-    """FR-M7-03 · FR-M7-06 — สร้างรายการเตือนล่วงหน้าเข้าคิว "รออนุมัติ" ทุกเช้า"""
+    """FR-M7-03 · FR-M7-06 — สร้างรายการเตือนมติที่เกินกำหนดเข้าคิว "รออนุมัติ" """
     return run_async(_scan_due())
 
 
@@ -412,16 +420,16 @@ async def _scan_due() -> dict:
     from app.services.mcp_agent import build_reminder_body
 
     today = date.today()
-    horizon = today + timedelta(days=settings.REMINDER_LEAD_DAYS)
     queued = 0
 
     async with session_scope() as session:
+        # เฉพาะมติที่สถานะยังเปิดอยู่ มีกำหนดเวลา และเกินกำหนด (over the deadline)
         rows = (
             await session.execute(
                 select(Resolution).where(
                     Resolution.status.in_(ResolutionStatus.OPEN),
                     Resolution.due_date.is_not(None),
-                    Resolution.due_date <= horizon,
+                    Resolution.due_date < today,
                 )
             )
         ).scalars().all()
@@ -454,11 +462,7 @@ async def _scan_due() -> dict:
                     continue
 
                 od = overdue_days(resolution, today)
-                subject = (
-                    f"แจ้งเตือน: {resolution.ref_no} เกินกำหนดแล้ว {od} วัน"
-                    if od
-                    else f"แจ้งเตือน: {resolution.ref_no} ครบกำหนดวันที่ {thai_date(resolution.due_date)}"
-                )
+                subject = f"แจ้งเตือน: {resolution.ref_no} เกินกำหนดแล้ว {od} วัน"
                 session.add(
                     OutboundAction(
                         series_id=resolution.series_id,

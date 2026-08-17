@@ -23,29 +23,43 @@ SAFETY_MARGIN_TOKENS = 1000
 MIN_CHUNK_TOKENS = 2000
 TARGET_CHUNK_TOKENS = 3500
 
-SYSTEM_PROMPT = """คุณคือเลขานุการที่ประชุมของหน่วยงานราชการไทย มีหน้าที่อ่านบันทึกคำต่อคำของการประชุมแล้วทำ 2 อย่าง:
-1. สรุปสาระสำคัญของการประชุม (summary):
-   - สรุปสาระสำคัญและประเด็นสำคัญทั้งหมดที่ที่ประชุมได้หารืออย่างครบถ้วนกระชับในภาษาราชการ
-2. สกัดมติที่ที่ประชุมเห็นชอบ/ตัดสินใจ/มอบหมาย (new_resolutions):
-   - text: ข้อความมติเต็มในภาษาราชการ (เช่น "มอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน (TOR)...", "อนุมัติงบประมาณ...")
-   - assignee_mention: ฝ่ายหรือบุคคลที่ได้รับมอบหมายตามที่พูดในที่ประชุม (เช่น "ฝ่ายพัสดุ", "ฝ่ายการเงิน", "ฝ่ายบริหารทั่วไป")
-   - category: procurement | policy | personnel | budget | operations | other
-   - confidence: 0.0 - 1.0 (ความมั่นใจ เช่น 0.9)
+SYSTEM_PROMPT = """คุณคือผู้ช่วยเลขานุการที่ประชุมราชการ มีหน้าที่สรุปสาระสำคัญและสกัดมติจากการประชุม
 
-ตอบกลับเป็น JSON เท่านั้นในรูปแบบ:
+ภารกิจ:
+1. สรุปสาระสำคัญ (summary): สรุปภาพรวมและประเด็นหารือหลักในภาษาราชการกระชับ รวมเรื่องเดียวกัน ตัดข้อความซ้ำซ้อนออก (ห้ามระบุวันที่ วันเวลา หรือวันเดือนปีที่จัดประชุมลงในเนื้อหาสรุป)
+2. ประเด็นสำคัญ (key_points): หัวข้อสรุปสั้นๆ 2-5 ข้อ (ไม่ต้องระบุวันที่)
+3. สกัดมติใหม่ (new_resolutions): สกัดเฉพาะข้อตกลง การอนุมัติ หรือการมอบหมายงานที่มีผลชัดเจน (ถ้าไม่พบมติ ให้ใส่ [])
+   - category: procurement | policy | personnel | budget | operations | other
+   - confidence: 0.0 - 1.0 (เช่น 0.95)
+   - segment_index: index ของท่อนคำพูดที่เกิดมติ
+   - due_date: วันครบกำหนด YYYY-MM-DD หรือ null
+4. ตรวจสอบมติค้างเดิม (updates): ติดตามมติค้างที่ระบุในบริบท (ถ้ามี)
+   - proposed_status: in_progress | blocked | done
+   - evidence: ข้อความหลักฐานที่พูดในที่ประชุม
+
+ข้อพึงระวัง:
+- ในส่วนสรุปสาระสำคัญ (summary) และประเด็นสำคัญ (key_points) ห้ามระบุวันที่หรือวันเวลาที่จัดการประชุม ให้เน้นเฉพาะเนื้อหาสาระสำคัญของการหารือเท่านั้น
+
+ตอบกลับเป็น JSON เท่านั้น:
 {
-  "summary": "สรุปสาระสำคัญและประเด็นที่ที่ประชุมได้หารือ...",
+  "summary": "ข้อความสรุปสาระสำคัญของการประชุมในภาษาราชการ...",
+  "key_points": [
+    "ประเด็นสำคัญที่ 1",
+    "ประเด็นสำคัญที่ 2"
+  ],
   "new_resolutions": [
     {
-      "text": "ข้อความมติเต็ม",
-      "assignee_mention": "ฝ่ายพัสดุ",
-      "category": "procurement",
-      "confidence": 0.9
+      "text": "ข้อความมติเต็มในภาษาราชการ",
+      "assignee_mention": "ฝ่าย/หน่วยงานที่รับผิดชอบ หรือ 'ไม่ระบุ'",
+      "category": "operations",
+      "confidence": 0.95,
+      "segment_index": 0,
+      "due_date": null
     }
-  ]
-}
-
-ถ้าไม่พบมติ ให้ใส่ new_resolutions เป็นลิสต์ว่าง ห้ามแต่งข้อมูลขึ้นมาเอง"""
+  ],
+  "updates": [],
+  "speakers": []
+}"""
 
 
 # ── Classes & Dataclasses ────────────────────────────────────────────────────
@@ -115,7 +129,7 @@ def extract(
     meeting_label: str = "",
 ) -> ExtractionResult:
     """
-    สรุปเนื้อหา ASR และสกัดมติที่เกิดขึ้นจากการประชุมแบบ Parallel Concurrent Chunks
+    สรุปเนื้อหา ASR และสกัดมติที่เกิดขึ้นจากการประชุมแบบ Concurrent Chunks (Single Prompt)
     """
     if not segments:
         return ExtractionResult()
@@ -149,9 +163,10 @@ def extract(
 
     merged = ExtractionResult()
     latest_updates: dict[str, ResolutionUpdate] = {}
+    valid_refs = {r.ref for r in open_resolutions} if open_resolutions else set()
 
     for i, data in chunk_results:
-        partial = _to_result(data, max_index=max_index)
+        partial = _to_result(data, valid_refs=valid_refs, max_index=max_index)
         if partial.summary:
             if not merged.summary:
                 merged.summary = partial.summary

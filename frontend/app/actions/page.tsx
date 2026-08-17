@@ -15,8 +15,8 @@ import { cancelAction, formatThaiDate, useApp } from "@/lib/store";
 import type { ActionType, OutboundAction } from "@/lib/types";
 
 const ACTION_META: Record<ActionType, { th: string; en: string; icon: React.ReactNode }> = {
-  send_meeting_summary_email: { th: "ส่งรายงานการประชุมรายบุคคล", en: "Personalized minutes email", icon: <Mail size={15} /> },
-  send_resolution_reminder: { th: "เตือนก่อนครบกำหนดมติ", en: "Resolution reminder", icon: <AlarmClock size={15} /> },
+  send_meeting_summary_email: { th: "สรุปสาระสำคัญและมติการประชุม", en: "Meeting summary email", icon: <Mail size={15} /> },
+  send_resolution_reminder: { th: "แจ้งเตือนมติเกินกำหนดส่ง", en: "Overdue resolution reminder", icon: <AlarmClock size={15} /> },
   send_agenda_preview: { th: "ส่งสรุปเรื่องค้างให้ประธาน", en: "Agenda preview to chair", icon: <CalendarClock size={15} /> },
   create_jira_issue: { th: "สร้าง issue ในระบบติดตามงาน", en: "Create tracker issue", icon: <Ticket size={15} /> },
 };
