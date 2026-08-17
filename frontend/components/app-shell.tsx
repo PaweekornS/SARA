@@ -10,7 +10,6 @@ import {
   ChevronDown,
   FileStack,
   Gauge,
-  Languages,
   ListChecks,
   Menu,
   Moon,
@@ -23,13 +22,22 @@ import {
   X,
 } from "lucide-react";
 import { useT } from "@/lib/i18n";
-import { LIVE, hydrate, loadFromServer, resetDemo, setError, setLang, toggleTheme, useApp } from "@/lib/store";
+import { LIVE, hydrate, loadFromServer, resetDemo, setActiveSeriesId, setError, toggleTheme, useApp } from "@/lib/store";
 import { ConfirmModal, cn } from "./ui";
 
 /* ── โครงหน้า: แถบซ้าย + เนื้อหา ─────────────────────────────────────── */
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
+  const { db, theme, activeSeriesId: storedSeriesId } = useApp();
+  const t = useT();
+
+  const match = pathname.match(/^\/series\/([^/]+)/);
+  const pathSeriesId = match?.[1];
+
+  const activeSeriesId = pathSeriesId || storedSeriesId || db.series[0]?.id;
+  const activeSeries = db.series.find((s) => s.id === activeSeriesId) ?? db.series[0];
 
   useEffect(() => hydrate(), []);
 
@@ -37,13 +45,41 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-dvh bg-paper">
       <Sidebar mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <button
-          onClick={() => setMobileOpen(true)}
-          className="no-print sticky top-0 z-20 flex items-center gap-2 border-b border-line bg-surface px-4 py-3 text-sm font-medium text-ink lg:hidden cursor-pointer"
-        >
-          <Menu size={18} />
-          SARA
-        </button>
+        {/* Top Header Bar with Active Series Name & Theme Toggle */}
+        <header className="no-print sticky top-0 z-20 flex h-14 items-center justify-between border-b border-line bg-surface/90 backdrop-blur-md px-4 sm:px-6">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              onClick={() => setMobileOpen(true)}
+              className="flex items-center gap-2 text-sm font-medium text-ink lg:hidden cursor-pointer p-1.5 -ml-1.5 rounded-[var(--radius)] hover:bg-sunken shrink-0"
+              aria-label="Open navigation"
+            >
+              <Menu size={18} />
+            </button>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[13.5px] font-semibold text-ink truncate">
+                {activeSeries?.name || "SARA"}
+              </span>
+              {activeSeries?.fiscal_year && (
+                <span className="hidden sm:inline-flex items-center rounded-full bg-sunken px-2 py-0.5 text-[11px] font-medium text-ink-3 shrink-0">
+                  ปี {activeSeries.fiscal_year}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 ml-auto shrink-0">
+            <button
+              onClick={toggleTheme}
+              className="flex items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line bg-surface px-3 py-1.5 text-[12px] font-medium text-ink-2 hover:bg-sunken hover:text-ink cursor-pointer shadow-xs transition-colors"
+              title={t("theme")}
+              aria-label={t("theme")}
+            >
+              {theme === "light" ? <Moon size={14} className="text-brand" /> : <Sun size={14} className="text-amber-500" />}
+              <span>{theme === "light" ? t.pick("โหมดมืด", "Dark") : t.pick("โหมดสว่าง", "Light")}</span>
+            </button>
+          </div>
+        </header>
+
         <ConnectionBanner />
         <main className="min-w-0 flex-1">{children}</main>
       </div>
@@ -91,12 +127,20 @@ function ConnectionBanner() {
 function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => void }) {
   const t = useT();
   const pathname = usePathname();
-  const { db, theme, lang } = useApp();
+  const { db, activeSeriesId: storedSeriesId } = useApp();
   const series = db.series;
   const pendingActions = db.actions.filter((a) => a.status === "pending_approval").length;
 
   const match = pathname.match(/^\/series\/([^/]+)/);
-  const activeSeriesId = match?.[1] ?? series[0]?.id;
+  const pathSeriesId = match?.[1];
+
+  useEffect(() => {
+    if (pathSeriesId) {
+      setActiveSeriesId(pathSeriesId);
+    }
+  }, [pathSeriesId]);
+
+  const activeSeriesId = pathSeriesId || storedSeriesId || series[0]?.id;
   const activeSeries = series.find((s) => s.id === activeSeriesId) ?? series[0];
   const base = `/series/${activeSeries?.id ?? ""}`;
 
@@ -127,12 +171,18 @@ function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => 
         )}
       >
         {/* ตราสัญลักษณ์ */}
-        <div className="flex items-center gap-3 px-4 py-4">
-          <SaraMark />
-          <div className="min-w-0 flex-1">
-            <p className="text-[15px] font-semibold leading-none tracking-tight text-ink">SARA</p>
-            <p className="mt-1 truncate text-[11px] leading-none text-ink-3">{t("appTagline")}</p>
-          </div>
+        <div className="flex items-center justify-between gap-3 px-4 py-4">
+          <Link
+            href="/series"
+            onClick={onClose}
+            className="flex min-w-0 flex-1 items-center gap-3 transition-opacity hover:opacity-85"
+          >
+            <SaraMark />
+            <div className="min-w-0 flex-1">
+              <p className="text-[15px] font-semibold leading-none tracking-tight text-ink">SARA</p>
+              <p className="mt-1 truncate text-[11px] leading-none text-ink-3">{t("appTagline")}</p>
+            </div>
+          </Link>
           <button onClick={onClose} className="rounded p-1 text-ink-3 hover:bg-sunken lg:hidden cursor-pointer">
             <X size={16} />
           </button>
@@ -207,28 +257,10 @@ function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => 
         </nav>
 
         {/* เครื่องมือท้ายแถบ */}
-        <div className="space-y-2 border-t border-line px-3 py-3">
-          <div className="flex gap-2">
-            <button
-              onClick={() => setLang(lang === "th" ? "en" : "th")}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line px-2 py-2 text-[12px] font-medium text-ink-2 hover:bg-sunken cursor-pointer"
-              title={lang === "th" ? "Switch to English" : "เปลี่ยนเป็นภาษาไทย"}
-            >
-              <Languages size={14} />
-              {lang === "th" ? "ไทย" : "EN"}
-            </button>
-            <button
-              onClick={toggleTheme}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line px-2 py-2 text-[12px] font-medium text-ink-2 hover:bg-sunken cursor-pointer"
-              title={t("theme")}
-            >
-              {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
-              {theme === "light" ? t.pick("มืด", "Dark") : t.pick("สว่าง", "Light")}
-            </button>
-          </div>
+        <div className="border-t border-line px-3 py-3">
           <button
             onClick={() => setResetOpen(true)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius)] px-2 py-2 text-[12px] text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer"
+            className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line px-2 py-2 text-[12px] text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer"
           >
             <RotateCcw size={13} />
             {t("resetDemo")}
@@ -269,15 +301,15 @@ function NavLink({
   href,
   label,
   icon,
-  active,
   badge,
+  active,
   onNavigate,
 }: {
   href: string;
   label: string;
   icon: React.ReactNode;
-  active: boolean;
   badge?: number;
+  active?: boolean;
   onNavigate?: () => void;
 }) {
   return (
@@ -285,17 +317,19 @@ function NavLink({
       href={href}
       onClick={onNavigate}
       className={cn(
-        "flex items-center gap-2.5 rounded-[var(--radius)] px-3 py-2 text-[13.5px] font-medium transition-colors",
-        active ? "bg-[var(--brand-soft)] text-brand" : "text-ink-2 hover:bg-sunken hover:text-ink",
+        "flex items-center gap-2.5 rounded-[var(--radius)] px-3 py-2 text-[13px] font-medium transition-colors",
+        active
+          ? "bg-[var(--brand-soft)] text-brand"
+          : "text-ink-2 hover:bg-sunken hover:text-ink",
       )}
     >
-      <span className={active ? "text-brand" : "text-ink-3"}>{icon}</span>
-      <span className="flex-1 truncate">{label}</span>
-      {badge ? (
-        <span className="tnum rounded-full bg-[var(--danger)] px-1.5 py-0.5 text-[10px] font-semibold text-white">
+      <span className={cn("shrink-0", active ? "text-brand" : "text-ink-3")}>{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {typeof badge === "number" && badge > 0 && (
+        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand px-1.5 text-[10.5px] font-semibold text-white tnum">
           {badge}
         </span>
-      ) : null}
+      )}
     </Link>
   );
 }
@@ -345,3 +379,5 @@ export function PageHeader({
 export function PageBody({ children, className }: { children: React.ReactNode; className?: string }) {
   return <div className={cn("mx-auto max-w-[1180px] px-5 py-6 sm:px-8", className)}>{children}</div>;
 }
+
+

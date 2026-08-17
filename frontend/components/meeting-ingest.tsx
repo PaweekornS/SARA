@@ -2,7 +2,7 @@
 
 /** M2 — อัปโหลด + แสดงสถานะ pipeline เป็นขั้น (FR-M2-01 ถึง 05) */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertOctagon, Check, FileAudio, FileText, Loader2, RotateCw, Upload } from "lucide-react";
 import { Badge, Button, Field, Input, Modal, cn } from "./ui";
@@ -12,6 +12,14 @@ import { useApp } from "@/lib/store";
 import type { Meeting } from "@/lib/types";
 
 const MAX_MB = 500;
+
+function getTodayIso(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
 
 export function UploadMeetingModal({
   open,
@@ -34,10 +42,15 @@ export function UploadMeetingModal({
   const [file, setFile] = useState<File | null>(null);
   const [dragging, setDragging] = useState(false);
   const [seqNo, setSeqNo] = useState(nextSeq);
-  const [date, setDate] = useState(series?.next_meeting_date ?? "");
-  const [failMode, setFailMode] = useState(false);
+  const [date, setDate] = useState(getTodayIso());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setDate(getTodayIso());
+    }
+  }, [open]);
 
   const isAudio = (name: string) => /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(name);
   const isTranscript = (name: string) => /\.(txt|docx?)$/i.test(name);
@@ -65,7 +78,7 @@ export function UploadMeetingModal({
         meeting_date: date,
         file_name: file.name,
         source_kind: isAudio(file.name) ? "audio" : "transcript",
-        simulate_asr_failure: failMode,
+        simulate_asr_failure: false,
         file,
       });
       onClose();
@@ -155,27 +168,131 @@ export function UploadMeetingModal({
             <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
         </div>
+      </div>
+    </Modal>
+  );
+}
 
-        {/* สวิตช์เดโม — ให้โชว์ได้ว่าเมื่อ ASR ล้ม ระบบหยุดและแจ้ง ไม่ใส่ข้อมูลปลอม */}
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-line bg-surface-2 px-3.5 py-3">
+export function ReuploadMeetingModal({
+  open,
+  onClose,
+  meeting,
+}: {
+  open: boolean;
+  onClose: () => void;
+  meeting: Meeting;
+}) {
+  const t = useT();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const [file, setFile] = useState<File | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const isAudio = (name: string) => /\.(mp3|wav|m4a|aac|ogg|flac)$/i.test(name);
+  const isTranscript = (name: string) => /\.(txt|docx?)$/i.test(name);
+
+  const pick = (f: File) => {
+    if (!isAudio(f.name) && !isTranscript(f.name)) {
+      setError(t.pick("รองรับเฉพาะไฟล์เสียง (mp3, wav, m4a) และ transcript (txt, docx)", "Unsupported file type"));
+      return;
+    }
+    if (f.size > MAX_MB * 1024 * 1024) {
+      setError(t.pick(`ไฟล์ใหญ่เกิน ${MAX_MB} MB`, `File exceeds ${MAX_MB} MB`));
+      return;
+    }
+    setError(null);
+    setFile(f);
+  };
+
+  const submit = async () => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      await api.reuploadMeeting(meeting.id, file, false);
+      onClose();
+      setFile(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t.pick("ลองใหม่ — อัปโหลดไฟล์การประชุม", "Retry — Upload Meeting File")}
+      desc={t.pick(
+        `อัปโหลดไฟล์เสียงหรือ transcript ใหม่สำหรับการประชุมครั้งที่ ${meeting.sequence_no}/${meeting.fiscal_year}`,
+        `Upload a new audio or transcript file for meeting ${meeting.sequence_no}/${meeting.fiscal_year}.`,
+      )}
+      width="max-w-xl"
+      footer={
+        <>
+          <Button onClick={onClose}>{t("cancel")}</Button>
+          <Button
+            variant="primary"
+            onClick={submit}
+            disabled={!file || busy}
+            icon={busy ? <Loader2 size={15} className="animate-spin" /> : undefined}
+          >
+            {t.pick("เริ่มประมวลผลใหม่", "Start re-processing")}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) pick(f);
+          }}
+          onClick={() => inputRef.current?.click()}
+          className={cn(
+            "flex cursor-pointer flex-col items-center justify-center rounded-[var(--radius)] border-2 border-dashed px-6 py-8 text-center transition-colors",
+            dragging ? "border-brand bg-[var(--brand-soft)]" : "border-[var(--line-strong)] hover:border-brand hover:bg-surface-2",
+          )}
+        >
           <input
-            type="checkbox"
-            checked={failMode}
-            onChange={(e) => setFailMode(e.target.checked)}
-            className="mt-0.5 h-4 w-4 accent-[var(--danger)]"
+            ref={inputRef}
+            type="file"
+            className="hidden"
+            accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.txt,.doc,.docx"
+            onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])}
           />
-          <span>
-            <span className="block text-[13px] font-medium text-ink">
-              {t.pick("จำลองสถานการณ์ ASR ล้มเหลว", "Simulate ASR failure")}
-            </span>
-            <span className="mt-0.5 block text-[12px] leading-snug text-ink-3">
-              {t.pick(
-                "ใช้แสดงว่าเมื่อถอดเสียงไม่สำเร็จ ระบบจะหยุด pipeline และแจ้งข้อผิดพลาดตามจริง ไม่สร้าง transcript ปลอมมาแทน",
-                "Shows that a failed transcription halts the pipeline instead of inventing a fake transcript.",
-              )}
-            </span>
-          </span>
-        </label>
+          <div className="mb-2.5 flex h-10 w-10 items-center justify-center rounded-full bg-[var(--brand-soft)] text-brand">
+            {file ? isAudio(file.name) ? <FileAudio size={18} /> : <FileText size={18} /> : <Upload size={18} />}
+          </div>
+          {file ? (
+            <>
+              <p className="text-[13.5px] font-medium text-ink">{file.name}</p>
+              <p className="tnum mt-0.5 text-[12px] text-ink-3">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
+            </>
+          ) : (
+            <>
+              <p className="text-[13.5px] font-medium text-ink">
+                {t.pick("ลากไฟล์ใหม่มาวาง หรือคลิกเพื่อเลือกไฟล์", "Drop a new file here or click to browse")}
+              </p>
+              <p className="mt-1 text-[12px] text-ink-3">
+                {t.pick(`ไฟล์เสียง mp3 · wav · m4a ไม่เกิน ${MAX_MB} MB หรือ transcript txt · docx`, "Audio or transcript")}
+              </p>
+            </>
+          )}
+        </div>
+
+        {error && (
+          <p className="rounded-[var(--radius)] bg-[var(--danger-bg)] px-3 py-2 text-[12.5px] text-[var(--danger)]">{error}</p>
+        )}
       </div>
     </Modal>
   );
@@ -186,8 +303,7 @@ export function UploadMeetingModal({
 const STAGE_LABEL: Record<string, [string, string]> = {
   upload: ["รับไฟล์", "Upload"],
   asr: ["ถอดเสียง", "Transcription"],
-  diarize: ["แยกผู้พูด", "Diarization"],
-  extract: ["สกัดมติและจับคู่", "Extraction & linking"],
+  extract: ["สรุปเนื้อหาและสกัดมติ", "Summarize & Extract Resolutions"],
   done: ["พร้อมตรวจทาน", "Ready for review"],
 };
 
@@ -237,11 +353,8 @@ export function PipelineStatus({ meeting, onRetry }: { meeting: Meeting; onRetry
                     step.state === "failed" && "text-[var(--danger)]",
                   )}
                 >
-                  {STAGE_LABEL[step.stage][t.lang === "th" ? 0 : 1]}
+                  {STAGE_LABEL[step.stage]?.[t.lang === "th" ? 0 : 1] ?? step.stage}
                 </p>
-                {step.detail && step.state !== "failed" && (
-                  <p className="mt-0.5 text-[12px] leading-snug text-ink-3">{step.detail}</p>
-                )}
                 {step.error && (
                   <p className="mt-1.5 rounded-[var(--radius)] bg-[var(--danger-bg)] px-3 py-2 text-[12.5px] leading-relaxed text-[var(--danger)]">
                     {step.error}

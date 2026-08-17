@@ -56,6 +56,7 @@ export interface AppState {
   /** สถานะการซิงก์กับ backend — ใช้เฉพาะตอน NEXT_PUBLIC_USE_MOCK=false */
   loading: boolean;
   lastError: string | null;
+  activeSeriesId?: string | null;
 }
 
 const STORAGE_KEY = "sara_v2_state";
@@ -68,6 +69,7 @@ function freshState(): AppState {
     actor: "นางสาวปรียานุช วัฒนสิน",
     loading: false,
     lastError: null,
+    activeSeriesId: null,
   };
 }
 
@@ -170,9 +172,9 @@ export function setError(message: string | null) {
 }
 
 /** ดึงข้อมูลทั้งก้อนจาก /bootstrap มาแทนที่ของเดิม */
-export async function loadFromServer(): Promise<void> {
+export async function loadFromServer(silent = false): Promise<void> {
   if (!LIVE) return;
-  set((s) => ({ ...s, loading: true }));
+  if (!silent) set((s) => ({ ...s, loading: true }));
   try {
     const db = await http.fetchBootstrap();
     set((s) => ({ ...s, db, loading: false, lastError: null }));
@@ -216,6 +218,12 @@ export function toggleTheme() {
   const theme: Theme = state.theme === "light" ? "dark" : "light";
   applyTheme(theme);
   set((s) => ({ ...s, theme }));
+}
+
+export function setActiveSeriesId(id: string) {
+  if (state.activeSeriesId !== id) {
+    set((s) => ({ ...s, activeSeriesId: id }));
+  }
 }
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
@@ -293,13 +301,12 @@ function clearTimers() {
   timers.clear();
 }
 
-const STAGE_ORDER: PipelineStage[] = ["upload", "asr", "diarize", "extract", "done"];
+const STAGE_ORDER: PipelineStage[] = ["upload", "asr", "extract", "done"];
 
 const STAGE_DETAIL: Record<PipelineStage, string> = {
   upload: "รับไฟล์และตรวจความสมบูรณ์",
   asr: "ถอดเสียงด้วย AI4Thai Partii ASR",
-  diarize: "แยกผู้พูดด้วย pyannote 3.1",
-  extract: "สกัดมติและจับคู่กับมติเดิมของชุดการประชุม",
+  extract: "สรุปเนื้อหาการประชุมและสกัดมติ",
   done: "พร้อมให้ตรวจทาน",
 };
 
@@ -360,11 +367,11 @@ export async function uploadMeetingLive(input: UploadInput & { file?: File }): P
 }
 
 /** ระหว่างประมวลผล ให้ดึงสถานะมาอัปเดตหน้าจอทุก 3 วินาทีจนกว่าจะเสร็จหรือพัง */
-function pollMeeting(meetingId: Uuid): void {
+export function pollMeeting(meetingId: Uuid): void {
   const timer = setInterval(async () => {
     try {
       const { status } = await http.meetingStatus(meetingId);
-      await loadFromServer();
+      await loadFromServer(true);
       if (status !== "processing") clearInterval(timer);
     } catch {
       clearInterval(timer);
@@ -389,6 +396,35 @@ export function retryMeeting(meetingId: Uuid) {
   runPipeline(meetingId, false);
 }
 
+/** อัปโหลดไฟล์ใหม่สำหรับ meeting เดิมที่ล้มเหลว (Re-upload Retry) */
+export async function reuploadMeeting(
+  meetingId: Uuid,
+  file: File,
+  simulate_asr_failure: boolean = false,
+) {
+  mutate((db) => ({
+    ...db,
+    meetings: db.meetings.map((m) =>
+      m.id === meetingId
+        ? {
+            ...m,
+            status: "processing",
+            pipeline: emptyPipeline(),
+            audio_uri: `minio://sara/uploads/${file.name}`,
+            source_kind: /\.(txt|docx?)$/i.test(file.name) ? "transcript" : "audio",
+          }
+        : m,
+    ),
+  }));
+  if (LIVE) {
+    await http.reuploadMeeting(meetingId, file, simulate_asr_failure, state.actor);
+    await loadFromServer();
+    pollMeeting(meetingId);
+    return;
+  }
+  runPipeline(meetingId, simulate_asr_failure);
+}
+
 function setStage(meetingId: Uuid, stage: PipelineStage, patch: Partial<Meeting["pipeline"][number]>) {
   mutate((db) => ({
     ...db,
@@ -403,7 +439,6 @@ function setStage(meetingId: Uuid, stage: PipelineStage, patch: Partial<Meeting[
 const STAGE_MS: Record<PipelineStage, number> = {
   upload: 900,
   asr: 3200,
-  diarize: 2200,
   extract: 2600,
   done: 300,
 };
@@ -438,7 +473,7 @@ function runPipeline(meetingId: Uuid, failAsr: boolean) {
 
     schedule(() => {
       setStage(meetingId, stage, { state: "ok" });
-      if (stage === "diarize") ingestTranscript(meetingId);
+      if (stage === "asr") ingestTranscript(meetingId);
       if (stage === "extract") runExtraction(meetingId);
       if (stage === "done") {
         mutate((db) => ({
@@ -940,8 +975,40 @@ export function decideProposal(
 }
 
 export function setMeetingStatus(meetingId: Uuid, status: Meeting["status"]) {
-  mutate((db) =>
-    audit(
+  mutate((db) => {
+    const meeting = db.meetings.find((m) => m.id === meetingId);
+    const series = meeting ? db.series.find((s) => s.id === meeting.series_id) : null;
+    const recipient = db.people.find((p) => !p.is_department && p.email);
+
+    const existingSummaryAction = db.actions.find(
+      (a) => a.meeting_id === meetingId && a.action_type === "send_meeting_summary_email"
+    );
+
+    const newActions = [...db.actions];
+    if (status === "approved" && meeting && !existingSummaryAction) {
+      const meetingRes = db.resolutions.filter((r) => r.origin_meeting_id === meetingId);
+      const summaryText = meeting.summary || "สรุปสาระสำคัญจากการประชุม";
+      const bodyText = `สรุปสาระสำคัญจากการประชุม${series?.name ?? ""} ครั้งที่ ${meeting.sequence_no}/${meeting.fiscal_year}\nเมื่อวันที่ ${formatThaiDate(meeting.meeting_date)}:\n\n${summaryText}`;
+
+      newActions.unshift({
+        id: uid("act"),
+        series_id: meeting.series_id,
+        meeting_id: meeting.id,
+        resolution_id: null,
+        action_type: "send_meeting_summary_email",
+        recipient_person_id: recipient?.id ?? null,
+        subject: `สรุปสาระสำคัญและมติการประชุม${series?.name ?? ""} ครั้งที่ ${meeting.sequence_no}/${meeting.fiscal_year}`,
+        body: bodyText,
+        scheduled_for: nowIso(),
+        status: "pending_approval",
+        approved_by: null,
+        sent_at: null,
+        error: null,
+        created_at: nowIso(),
+      });
+    }
+
+    return audit(
       {
         ...db,
         meetings: db.meetings.map((m) =>
@@ -963,13 +1030,14 @@ export function setMeetingStatus(meetingId: Uuid, status: Meeting["status"]) {
                   : r,
               )
             : db.resolutions,
+        actions: newActions,
       },
       `meeting_${status}`,
       "meeting",
       meetingId,
       status,
-    ),
-  );
+    );
+  });
   if (status === "approved") sync(() => http.approveMeeting(meetingId, state.actor));
 }
 

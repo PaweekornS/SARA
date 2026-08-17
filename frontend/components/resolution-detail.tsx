@@ -73,7 +73,7 @@ export function ResolutionDrawer({ resolutionId, onClose }: { resolutionId: Uuid
       <aside className="fade-up relative flex h-full w-full max-w-[620px] flex-col border-l border-line bg-surface shadow-[var(--shadow-3)]">
         {/* หัวแผง */}
         <div className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-mono text-[12px] font-medium text-brand">{r.ref_no}</span>
               <StatusPill status={r.status} label={STATUS_LABEL_TH[r.status]} size="sm" />
@@ -83,29 +83,31 @@ export function ResolutionDrawer({ resolutionId, onClose }: { resolutionId: Uuid
                   {t("overdueBy")} {od} {t("days")}
                 </Badge>
               )}
-              {r.postpone_count >= 3 && (
-                <Badge tone="warn">
-                  ⚑ {t("postponedTimes")} {r.postpone_count} {t("times")}
-                </Badge>
-              )}
             </div>
             <p className="mt-2 text-[14.5px] font-medium leading-relaxed text-ink">{r.text}</p>
           </div>
-          <button onClick={onClose} className="rounded p-1.5 text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer">
-            <X size={17} />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <Button size="sm" variant="secondary" icon={<PenLine size={14} />} onClick={() => setEditing(true)}>
+              {t("edit")}
+            </Button>
+            <button onClick={onClose} className="rounded p-1.5 text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer">
+              <X size={17} />
+            </button>
+          </div>
         </div>
 
         {/* ปุ่มดำเนินการ */}
         <div className="flex flex-wrap gap-2 border-b border-line px-5 py-3">
-          <Button size="sm" icon={<PenLine size={14} />} onClick={() => setEditing(true)}>
-            {t("edit")}
-          </Button>
-          {NEXT_STATUSES[r.status].map((s) => (
-            <Button key={s} size="sm" variant={s === "done" ? "primary" : "secondary"} onClick={() => setStatusTarget(s)}>
-              → {STATUS_LABEL_TH[s]}
+          {r.status !== "done" && (
+            <Button size="sm" variant="primary" onClick={() => setStatusTarget("done")}>
+              ดำเนินการแล้วเสร็จ
             </Button>
-          ))}
+          )}
+          {r.status !== "cancelled" && (
+            <Button size="sm" variant="secondary" onClick={() => setStatusTarget("cancelled")}>
+              ยกเลิก
+            </Button>
+          )}
         </div>
 
         <div className="flex-1 space-y-6 overflow-y-auto px-5 py-5">
@@ -477,8 +479,6 @@ export function StatusChangeModal({
   );
 }
 
-/* ── แถวมติแบบย่อ ใช้ในลิสต์และแดชบอร์ด ─────────────────────────────── */
-
 export function ResolutionRow({
   resolution,
   onOpen,
@@ -493,12 +493,16 @@ export function ResolutionRow({
   const od = overdueDays(resolution);
   const origin = db.meetings.find((m) => m.id === resolution.origin_meeting_id);
 
+  const stageLabel = resolution.status === "done" ? "เสร็จ" : od > 0 ? "เกินกำหนด" : "กำลังดำเนินการ";
+  const stageTone: "ok" | "danger" | "brand" = resolution.status === "done" ? "ok" : od > 0 ? "danger" : "brand";
+  const dotBg = resolution.status === "done" ? "var(--ok)" : od > 0 ? "var(--danger)" : "var(--brand)";
+
   return (
     <button
       onClick={onOpen}
       className="group flex w-full items-start gap-3 border-b border-line px-4 py-3.5 text-left transition-colors last:border-b-0 hover:bg-surface-2 cursor-pointer"
     >
-      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: statusColor(resolution.status) }} />
+      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: dotBg }} />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="font-mono text-[11.5px] text-ink-3">{resolution.ref_no}</span>
@@ -508,7 +512,6 @@ export function ResolutionRow({
               {t("overdueBy")} {od} {t("days")}
             </Badge>
           )}
-          {resolution.postpone_count >= 3 && <Badge tone="warn">⚑ {resolution.postpone_count} {t("times")}</Badge>}
           {resolution.extraction_confidence < 0.75 && (
             <Badge tone="warn">
               <Quote size={10} /> {t("lowConfidence")}
@@ -532,7 +535,9 @@ export function ResolutionRow({
         </div>
       </div>
       <div className="shrink-0 pt-0.5">
-        <StatusPill status={resolution.status} label={STATUS_LABEL_TH[resolution.status]} size="sm" />
+        <Badge tone={stageTone} className="px-2.5 py-1 text-[11.5px]">
+          {stageLabel}
+        </Badge>
       </div>
     </button>
   );

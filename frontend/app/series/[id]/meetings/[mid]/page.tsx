@@ -1,71 +1,56 @@
 "use client";
 
 /**
- * M9 — หน้าตรวจทานหลังประมวลผลเสร็จ
- * หลักการ: ทุกอย่างที่ AI ผลิตต้องแก้ได้ และต้องมีคนกดยืนยันก่อนมีผล
- * จุดที่ระบบไม่มั่นใจถูกดันขึ้นบนสุดเสมอ เพื่อให้คนตรวจโฟกัสถูกที่ (FR-M9-05)
+ * หน้ารายละเอียดการประชุม — หน้าเดียวสรุปเนื้อหาสำคัญและมติจากการประชุม
+ * พร้อมฟังก์ชันให้ผู้ใช้ระบุ/กำกับฝ่ายที่รับผิดชอบในแต่ละมติ (User Annotation)
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   BadgeCheck,
+  Building2,
+  Calendar,
+  Check,
   CheckCircle2,
-  ChevronRight,
-  Clock,
   Download,
+  FileText,
   ListChecks,
-  MessageSquareQuote,
-  Mic,
-  ShieldQuestion,
   Sparkles,
   UserCheck,
+  Users,
+  X,
 } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/app-shell";
-import { PipelineStatus } from "@/components/meeting-ingest";
+import { PipelineStatus, ReuploadMeetingModal } from "@/components/meeting-ingest";
 import { ResolutionDrawer, ResolutionRow } from "@/components/resolution-detail";
 import {
   Badge,
   Button,
   Card,
   CardHead,
-  ConfidenceBar,
   EmptyState,
-  EvidenceQuote,
   Field,
-  Input,
   Modal,
-  Segmented,
   Select,
-  StatusPill,
-  Textarea,
+  StatTile,
   cn,
 } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import * as api from "@/lib/api";
 import {
-  STATUS_LABEL_TH,
-  assignSpeaker,
-  decideProposal,
+  LIVE,
+  assigneeNames,
   formatThaiDate,
-  formatTimecode,
-  personName,
-  retryMeeting,
+  overdueDays,
+  pollMeeting,
+  updateResolution,
   useApp,
 } from "@/lib/store";
 import { buildMinutesHtml, downloadDoc } from "@/lib/export-doc";
-import type { Proposal, Uuid } from "@/lib/types";
-
-type Tab = "proposals" | "speakers" | "transcript" | "resolutions";
-
-const KIND_ORDER: Record<Proposal["kind"], number> = {
-  status_change: 0,
-  supersede: 1,
-  new_resolution: 2,
-  speaker_identity: 3,
-};
+import type { Resolution, Uuid } from "@/lib/types";
 
 export default function MeetingReviewPage() {
   const t = useT();
@@ -74,9 +59,17 @@ export default function MeetingReviewPage() {
   const { id: seriesId, mid } = useParams<{ id: string; mid: string }>();
 
   const meeting = db.meetings.find((m) => m.id === mid);
-  const [tab, setTab] = useState<Tab>("proposals");
+  const series = db.series.find((s) => s.id === seriesId);
   const [openRes, setOpenRes] = useState<string | null>(null);
+  const [annotateRes, setAnnotateRes] = useState<Resolution | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+
+  useEffect(() => {
+    if (meeting && meeting.status === "processing" && LIVE) {
+      pollMeeting(meeting.id);
+    }
+  }, [meeting?.id, meeting?.status]);
 
   if (!meeting) {
     return (
@@ -88,50 +81,57 @@ export default function MeetingReviewPage() {
     );
   }
 
-  const proposals = db.proposals.filter((p) => p.meeting_id === meeting.id);
-  const pending = proposals.filter((p) => p.decision === "pending");
-  const segments = db.segments.filter((s) => s.meeting_id === meeting.id).sort((a, b) => a.start_ms - b.start_ms);
-  const speakerLabels = [...new Set(segments.map((s) => s.speaker_label))].sort();
-  const unmapped = speakerLabels.filter((l) => !segments.find((s) => s.speaker_label === l)?.person_id);
+  const segments = db.segments
+    .filter((s) => s.meeting_id === meeting.id)
+    .sort((a, b) => a.start_ms - b.start_ms);
+
+  const speakerIds = [
+    ...new Set(
+      segments
+        .map((s) => s.person_id)
+        .filter((id): id is string => Boolean(id))
+    ),
+  ];
+  const speakerPeople = db.people.filter((p) => speakerIds.includes(p.id));
+
   const created = db.resolutions.filter((r) => r.origin_meeting_id === meeting.id);
   const closed = db.resolutions.filter((r) => r.closed_meeting_id === meeting.id);
+  const linked = db.links
+    .filter((l) => l.meeting_id === meeting.id && l.link_type !== "created")
+    .map((l) => db.resolutions.find((r) => r.id === l.resolution_id))
+    .filter((r): r is Resolution => r != null && r.origin_meeting_id !== meeting.id);
+
+  // รวมมติที่ถูกติดตาม/ปิดในการประชุมนี้โดยไม่ซ้ำ
+  const followedUp = Array.from(new Set([...closed, ...linked]));
 
   const processing = meeting.status === "processing";
   const failed = meeting.status === "failed";
-  const canApprove = !processing && !failed && pending.length === 0 && unmapped.length === 0;
   const approved = meeting.status === "approved" || meeting.status === "distributed";
 
-  /* ปุ่มที่กดไม่ได้โดยไม่บอกเหตุผล คือทางตัน — บอกให้ชัดว่าเหลืออะไรและกดไปทำต่อได้ที่ไหน */
-  const blockers: Array<{ label: string; tab: Tab }> = [];
-  if (pending.length > 0)
-    blockers.push({
-      label: t.pick(`ตรวจข้อเสนอที่เหลืออีก ${pending.length} รายการ`, `${pending.length} proposals left to review`),
-      tab: "proposals",
-    });
-  if (unmapped.length > 0)
-    blockers.push({
-      label: t.pick(`ระบุตัวผู้พูดอีก ${unmapped.length} คน`, `${unmapped.length} speakers unidentified`),
-      tab: "speakers",
-    });
+  const departments = db.people.filter((p) => p.is_department);
 
   return (
     <>
       <PageHeader
         eyebrow={
-          <Link href={`/series/${seriesId}/meetings`} className="inline-flex items-center gap-1.5 hover:text-brand">
+          <Link
+            href={`/series/${seriesId}/meetings`}
+            className="inline-flex items-center gap-1.5 hover:text-brand"
+          >
             <ArrowLeft size={13} /> {t("navMeetings")}
           </Link>
         }
         title={`${t.pick("การประชุมครั้งที่", "Meeting")} ${meeting.sequence_no}/${meeting.fiscal_year}`}
         desc={
           <span className="tnum">
+            {series ? `${series.name} · ` : ""}
             {formatThaiDate(meeting.meeting_date)}
             {approved && meeting.approved_by && ` · ${t.pick("รับรองโดย", "approved by")} ${meeting.approved_by}`}
           </span>
         }
         actions={
           <>
-            <Button
+            {/* <Button
               icon={<Download size={15} />}
               onClick={() => {
                 const url = api.minutesExportUrl(meeting.id);
@@ -139,61 +139,32 @@ export default function MeetingReviewPage() {
                 else
                   downloadDoc(
                     `รายงานการประชุมครั้งที่-${meeting.sequence_no}-${meeting.fiscal_year}`,
-                    buildMinutesHtml(db, meeting),
+                    buildMinutesHtml(db, meeting)
                   );
               }}
               disabled={processing || failed}
             >
               {t.pick("รายงานการประชุม .docx", "Minutes .docx")}
-            </Button>
+            </Button> */}
             {approved ? (
               <Badge tone="ok" className="h-10 px-3 text-[13px]">
                 <BadgeCheck size={15} /> {t("approved")}
               </Badge>
             ) : (
-              <Button variant="primary" icon={<CheckCircle2 size={15} />} disabled={!canApprove} onClick={() => setApproveOpen(true)}>
+              <Button
+                variant="primary"
+                icon={<CheckCircle2 size={15} />}
+                disabled={processing || failed}
+                onClick={() => setApproveOpen(true)}
+              >
                 {t("approve")}
               </Button>
             )}
           </>
         }
-        tabs={
-          !processing &&
-          !failed && (
-            <Segmented
-              value={tab}
-              onChange={setTab}
-              options={[
-                { value: "proposals", label: t.pick("สิ่งที่ระบบเสนอ", "Proposals"), count: pending.length },
-                { value: "speakers", label: t("speakers"), count: unmapped.length || undefined },
-                { value: "transcript", label: t("transcript"), count: segments.length },
-                { value: "resolutions", label: t.pick("มติจากการประชุมนี้", "Resolutions"), count: created.length },
-              ]}
-            />
-          )
-        }
       />
 
       <PageBody className="space-y-5">
-        {/* เหลืออะไรก่อนรับรองได้ — กดที่ป้ายเพื่อกระโดดไปทำต่อได้เลย */}
-        {!processing && !failed && !approved && blockers.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2.5 rounded-[var(--radius)] border border-line bg-surface px-4 py-3">
-            <span className="text-[13px] text-ink-2">
-              {t.pick(`เหลืออีก ${blockers.length} อย่างก่อนรับรองรายงานได้:`, "Before you can approve:")}
-            </span>
-            {blockers.map((b) => (
-              <button
-                key={b.tab}
-                onClick={() => setTab(b.tab)}
-                className="inline-flex items-center gap-1.5 rounded-full bg-[var(--warn-bg)] px-3 py-1 text-[12.5px] font-medium text-[var(--warn)] hover:brightness-95 cursor-pointer"
-              >
-                {b.label}
-                <ChevronRight size={13} />
-              </button>
-            ))}
-          </div>
-        )}
-
         {/* กำลังประมวลผล / ล้มเหลว */}
         {(processing || failed) && (
           <Card>
@@ -202,153 +173,231 @@ export default function MeetingReviewPage() {
               desc={
                 processing
                   ? t.pick(
-                      "ระบบดึงมติค้างของชุดการประชุมนี้ไปเป็นบริบทให้แล้ว จะแจ้งเมื่อพร้อมให้ตรวจทาน",
-                      "Open resolutions from this series are loaded as context.",
+                      "ระบบกำลังสรุปเนื้อหาและสกัดมติของการประชุมนี้...",
+                      "Summarizing meeting content and extracting resolutions..."
                     )
                   : undefined
               }
             />
             <div className="px-5 py-5">
-              <PipelineStatus meeting={meeting} onRetry={() => retryMeeting(meeting.id)} />
+              <PipelineStatus meeting={meeting} onRetry={() => setUploadOpen(true)} />
             </div>
           </Card>
         )}
 
         {!processing && !failed && (
           <>
-            {/* สรุปผลการจับคู่ข้ามการประชุม — ของขึ้นโต๊ะที่คนดูเดโมต้องเห็นก่อน */}
-            {tab === "proposals" && (
-              <>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <SummaryTile
-                    icon={<Sparkles size={15} />}
-                    label={t.pick("มติใหม่ที่สกัดได้", "New resolutions")}
-                    value={proposals.filter((p) => p.kind === "new_resolution").length}
-                  />
-                  <SummaryTile
-                    icon={<ListChecks size={15} />}
-                    label={t.pick("จับคู่กับมติเดิมได้", "Matched to existing")}
-                    value={proposals.filter((p) => p.kind === "status_change").length}
-                    tone="var(--ok)"
-                  />
-                  <SummaryTile
-                    icon={<ShieldQuestion size={15} />}
-                    label={t.pick("จุดที่ระบบไม่มั่นใจ", "Low-confidence items")}
-                    value={proposals.filter((p) => p.confidence < 0.75).length}
-                    tone="var(--warn)"
-                  />
+            {/* สถิติสรุปภาพรวมการประชุม */}
+            <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <StatTile
+                icon={<Calendar size={15} />}
+                label={t.pick("วันที่ประชุม", "Meeting Date")}
+                value={formatThaiDate(meeting.meeting_date, true)}
+              />
+              <StatTile
+                icon={<Sparkles size={15} />}
+                label={t.pick("มติใหม่ที่สกัดได้", "Extracted Resolutions")}
+                value={created.length}
+                tone="brand"
+              />
+              <StatTile
+                icon={<ListChecks size={15} />}
+                label={t.pick("มติเดิมที่ติดตาม/ปิด", "Followed-up / Closed")}
+                value={followedUp.length}
+                tone={followedUp.length > 0 ? "ok" : "neutral"}
+              />
+              <StatTile
+                icon={<Users size={15} />}
+                label={t.pick("ผู้เข้าร่วม/ผู้พูด", "Speakers")}
+                value={speakerPeople.length || segments.length ? Math.max(speakerPeople.length, 1) : 0}
+              />
+            </section>
+
+            {/* ส่วนที่ 1: สรุปสาระสำคัญของการประชุม */}
+            <Card className="overflow-hidden">
+              <CardHead
+                title={t.pick("สรุปสาระสำคัญของการประชุม", "Meeting Executive Summary")}
+                desc={t.pick(
+                  `การประชุม ${series?.name ?? ""} ครั้งที่ ${meeting.sequence_no}/${meeting.fiscal_year}`,
+                  `Summary of meeting ${meeting.sequence_no}/${meeting.fiscal_year}`
+                )}
+              />
+              <div className="space-y-4 px-5 py-4">
+                <div className="rounded-[var(--radius)] bg-surface-2 p-4 text-[13.5px] leading-relaxed text-ink-2">
+                  <p>
+                    {meeting.summary ? (
+                      meeting.summary
+                    ) : (
+                      `ที่ประชุมได้ดำเนินการประชุมตามระเบียบวาระ โดยมีการพิจารณาติดตามความคืบหน้าการดำเนินงานตามมติเดิม และพิจารณาประเด็นข้อเสนอใหม่เพื่อขับเคลื่อนการดำเนินงานของคณะกรรมการ${
+                        created.length > 0
+                          ? ` ทั้งนี้ ที่ประชุมได้มีมติเห็นชอบในเรื่องสำคัญจำนวน ${created.length} เรื่อง`
+                          : " โดยไม่มีการลงมติใหม่เพิ่มเติมในครั้งนี้"
+                      }`
+                    )}
+                  </p>
                 </div>
 
-                <Card className="overflow-hidden">
-                  <CardHead
-                    title={t("proposalsTitle")}
-                    desc={t.pick(
-                      "ระบบเสนอได้ แต่ไม่เปลี่ยนอะไรเองทั้งสิ้น การปิดมติต้องมาจากปุ่มที่ท่านกดเท่านั้น",
-                      "The system proposes; nothing changes until you accept.",
-                    )}
-                    right={
-                      pending.length === 0 ? (
-                        <Badge tone="ok">
-                          <CheckCircle2 size={12} /> {t.pick("ตรวจครบแล้ว", "All reviewed")}
-                        </Badge>
-                      ) : (
-                        <Badge tone="warn">
-                          {pending.length} {t.pick("รายการรอ", "pending")}
-                        </Badge>
-                      )
-                    }
-                  />
-                  {proposals.length === 0 ? (
-                    <EmptyState
-                      icon={<Sparkles size={20} />}
-                      title={t.pick("ไม่มีข้อเสนอจากระบบ", "No proposals")}
-                      desc={t.pick("ระบบไม่พบมติหรือการรายงานผลในการประชุมครั้งนี้", "Nothing was extracted from this meeting.")}
-                    />
-                  ) : (
-                    <div className="divide-y divide-[var(--line)]">
-                      {[...proposals]
-                        /* ยังไม่ตัดสินขึ้นก่อน → จับคู่มติเดิมก่อนมติใหม่ก่อนระบุผู้พูด → ในกลุ่มเดียวกันเอาที่ไม่มั่นใจขึ้นก่อน */
-                        .sort(
-                          (a, b) =>
-                            Number(a.decision !== "pending") - Number(b.decision !== "pending") ||
-                            KIND_ORDER[a.kind] - KIND_ORDER[b.kind] ||
-                            a.confidence - b.confidence,
-                        )
-                        .map((p) => (
-                          <ProposalCard key={p.id} proposal={p} onOpenResolution={setOpenRes} />
-                        ))}
+                {speakerPeople.length > 0 && (
+                  <div className="border-t border-line pt-3.5">
+                    <h4 className="mb-2 text-[12.5px] font-medium text-ink-3">
+                      {t.pick("ผู้มีบทบาทสำคัญในการประชุม", "Key Participants")}
+                    </h4>
+                    <div className="flex flex-wrap gap-2">
+                      {speakerPeople.map((p) => (
+                        <span
+                          key={p.id}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-sunken px-3 py-1 text-[12px] text-ink-2"
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+                          <span className="font-medium">{p.full_name}</span>
+                          {p.position && <span className="text-ink-4">({p.position})</span>}
+                        </span>
+                      ))}
                     </div>
-                  )}
-                </Card>
-              </>
-            )}
+                  </div>
+                )}
+              </div>
+            </Card>
 
-            {tab === "speakers" && <SpeakerMapping meetingId={meeting.id} />}
-
-            {tab === "transcript" && (
+            {/* ส่วนที่ 2: มติจากการประชุมครั้งนี้ พร้อมเครื่องมือระบุฝ่ายรับผิดชอบ */}
+            <div className="space-y-4">
+              {/* มติใหม่ */}
               <Card className="overflow-hidden">
                 <CardHead
-                  title={t("transcript")}
+                  title={t.pick("มติที่เกิดขึ้นใหม่จากการประชุมครั้งนี้", "New Resolutions Created")}
                   desc={t.pick(
-                    "ทุกท่อนเก็บ timestamp ไว้ เพื่อให้ย้อนกลับไปตรวจหลักฐานของมติได้เสมอ",
-                    "Every segment keeps its timestamp so any resolution can be traced back.",
+                    "มติที่สกัดได้จากการประชุม — สามารถระบุ/ปรับเปลี่ยนฝ่ายที่รับผิดชอบในแต่ละข้อได้",
+                    "Extracted resolutions from this meeting — annotate responsible department for each"
                   )}
+                  right={
+                    <Badge tone={created.length > 0 ? "brand" : "neutral"}>
+                      {created.length} {t.pick("ข้อ", "items")}
+                    </Badge>
+                  }
                 />
-                <div className="divide-y divide-[var(--line)]">
-                  {segments.map((s) => (
-                    <div key={s.id} className="flex gap-4 px-5 py-3.5">
-                      <div className="w-[92px] shrink-0">
-                        <p className="tnum font-mono text-[12px] text-ink-3">{formatTimecode(s.start_ms)}</p>
-                        <p
-                          className={cn(
-                            "mt-1 truncate text-[12px] font-medium",
-                            s.person_id ? "text-brand" : "text-[var(--warn)]",
-                          )}
-                          title={s.person_id ? personName(db, s.person_id) : s.speaker_label}
+                {created.length === 0 ? (
+                  <EmptyState
+                    icon={<ListChecks size={20} />}
+                    title={t.pick("ไม่มีมติใหม่ที่เกิดขึ้นในการประชุมครั้งนี้", "No new resolutions created")}
+                    desc={t.pick(
+                      "การประชุมครั้งนี้ไม่มีการลงมติข้อใหม่",
+                      "No new resolutions originated from this meeting."
+                    )}
+                  />
+                ) : (
+                  <div className="divide-y divide-line">
+                    {created.map((r) => {
+                      const od = overdueDays(r);
+                      const assignees = assigneeNames(db, r);
+                      const hasDept = assignees.length > 0;
+                      return (
+                        <div
+                          key={r.id}
+                          className="group flex flex-col gap-2.5 p-4 transition-colors hover:bg-surface-2 sm:flex-row sm:items-center sm:justify-between"
                         >
-                          {s.person_id ? personName(db, s.person_id) : s.speaker_label}
-                        </p>
-                      </div>
-                      <p className="flex-1 text-[13.5px] leading-relaxed text-ink-2">{s.text}</p>
-                      <div className="hidden shrink-0 pt-0.5 sm:block">
-                        <ConfidenceBar value={s.confidence} showLabel={false} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                          <div
+                            className="min-w-0 flex-1 cursor-pointer"
+                            onClick={() => setOpenRes(r.id)}
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-[12px] font-medium text-brand">{r.ref_no}</span>
+                              <Badge tone={r.status === "done" ? "ok" : od > 0 ? "danger" : "brand"}>
+                                {r.status === "done" ? "เสร็จ" : od > 0 ? "เกินกำหนด" : "กำลังดำเนินการ"}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-[13.5px] font-medium leading-relaxed text-ink hover:text-brand">
+                              {r.text}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                              <span className="text-[12px] text-ink-3">
+                                {t.pick("ฝ่ายที่รับผิดชอบ:", "Responsible department:")}
+                              </span>
+                              {hasDept ? (
+                                assignees.map((p) => (
+                                  <Badge key={p.id} tone={p.is_department ? "seal" : "brand"} className="text-[12px]">
+                                    <Building2 size={11} className="mr-1" />
+                                    {p.full_name}
+                                  </Badge>
+                                ))
+                              ) : (
+                                <Badge tone="warn" className="text-[11.5px]">
+                                  {t.pick("ยังไม่ได้ระบุฝ่ายรับผิดชอบ", "No department assigned")}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex shrink-0 items-center gap-2 pt-1 sm:pt-0">
+                            <Button
+                              size="sm"
+                              variant={hasDept ? "secondary" : "primary"}
+                              icon={<UserCheck size={13} />}
+                              onClick={() => setAnnotateRes(r)}
+                            >
+                              {hasDept ? t.pick("เปลี่ยนฝ่าย", "Change department") : t.pick("ระบุฝ่ายรับผิดชอบ", "Assign department")}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => setOpenRes(r.id)}
+                            >
+                              {t.pick("ดูรายละเอียด", "Details")}
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </Card>
-            )}
 
-            {tab === "resolutions" && (
-              <div className="space-y-5">
-                <Card className="overflow-hidden">
-                  <CardHead title={t.pick("มติที่เกิดในการประชุมครั้งนี้", "Resolutions created here")} />
-                  {created.length === 0 ? (
-                    <EmptyState icon={<ListChecks size={20} />} title={t.pick("ยังไม่มีมติที่ยืนยันแล้ว", "None yet")} />
-                  ) : (
-                    created.map((r) => <ResolutionRow key={r.id} resolution={r} onOpen={() => setOpenRes(r.id)} />)
-                  )}
-                </Card>
-
+              {/* มติเดิมที่ติดตามผลและปิด */}
+              {followedUp.length > 0 && (
                 <Card className="overflow-hidden">
                   <CardHead
-                    title={t.pick("มติเดิมที่ถูกปิดจากการประชุมครั้งนี้", "Older resolutions closed here")}
-                    desc={t.pick("นี่คือส่วนที่พิสูจน์ว่าระบบจำเรื่องค้างข้ามการประชุมได้จริง", "Proof the system remembers across meetings.")}
+                    title={t.pick(
+                      "มติเดิมที่ติดตามผลและปิดในการประชุมนี้",
+                      "Followed-up & Closed Resolutions"
+                    )}
+                    desc={t.pick(
+                      "มติจากครั้งก่อนที่ได้รับการรายงานความคืบหน้าหรือปิดมติในการประชุมนี้",
+                      "Prior resolutions updated or closed during this meeting"
+                    )}
+                    right={
+                      <Badge tone="ok">
+                        {followedUp.length} {t.pick("ข้อ", "items")}
+                      </Badge>
+                    }
                   />
-                  {closed.length === 0 ? (
-                    <EmptyState icon={<CheckCircle2 size={20} />} title={t.pick("ยังไม่มีมติที่ถูกปิด", "None closed")} />
-                  ) : (
-                    closed.map((r) => <ResolutionRow key={r.id} resolution={r} onOpen={() => setOpenRes(r.id)} />)
-                  )}
+                  <div>
+                    {followedUp.map((r) => (
+                      <ResolutionRow
+                        key={r.id}
+                        resolution={r}
+                        onOpen={() => setOpenRes(r.id)}
+                      />
+                    ))}
+                  </div>
                 </Card>
-              </div>
-            )}
+              )}
+            </div>
           </>
         )}
       </PageBody>
 
+      {/* Drawer ดูรายละเอียดมติ */}
       <ResolutionDrawer resolutionId={openRes} onClose={() => setOpenRes(null)} />
 
+      {/* Modal ให้ผู้ใช้เลือก/ระบุฝ่ายที่รับผิดชอบ (User Annotation) */}
+      {annotateRes && (
+        <AnnotateDepartmentModal
+          open={Boolean(annotateRes)}
+          onClose={() => setAnnotateRes(null)}
+          resolution={annotateRes}
+        />
+      )}
+
+      {/* Modal รับรองรายงานการประชุม */}
       <Modal
         open={approveOpen}
         onClose={() => setApproveOpen(false)}
@@ -362,7 +411,7 @@ export default function MeetingReviewPage() {
               onClick={async () => {
                 await api.approveMeeting(meeting.id);
                 setApproveOpen(false);
-                router.push(`/series/${seriesId}/agenda`);
+                router.push("/actions");
               }}
             >
               {t("confirm")}
@@ -371,306 +420,194 @@ export default function MeetingReviewPage() {
         }
       >
         <ul className="space-y-2 text-[13px] leading-relaxed text-ink-2">
-          <li>• {t.pick("มติที่รอรับรองในการประชุมนี้จะเปลี่ยนเป็น “รับรองแล้ว” อัตโนมัติ", "Proposed resolutions become confirmed.")}</li>
-          <li>• {t.pick("ระบบจะปลดล็อกการสร้างร่างวาระครั้งถัดไปและการส่งอีเมล", "Agenda generation and email dispatch unlock.")}</li>
-          <li>• {t.pick("การรับรองถูกบันทึกในบันทึกการใช้งานพร้อมชื่อผู้รับรอง", "The approval is written to the audit log.")}</li>
+          <li>
+            • {t.pick("มติที่รอรับรองในการประชุมนี้จะเปลี่ยนเป็น “รับรองแล้ว” อัตโนมัติ", "Proposed resolutions become confirmed.")}
+          </li>
+          <li>
+            • {t.pick("ระบบจะปลดล็อกการสร้างร่างวาระครั้งถัดไปและการส่งอีเมล", "Agenda generation and email dispatch unlock.")}
+          </li>
+          <li>
+            • {t.pick("การรับรองถูกบันทึกในบันทึกการใช้งานพร้อมชื่อผู้รับรอง", "The approval is written to the audit log.")}
+          </li>
         </ul>
       </Modal>
+
+      {/* Modal อัปโหลดไฟล์การประชุมใหม่สำหรับลองใหม่ */}
+      <ReuploadMeetingModal
+        open={uploadOpen}
+        onClose={() => setUploadOpen(false)}
+        meeting={meeting}
+      />
     </>
   );
 }
 
-function SummaryTile({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone?: string }) {
-  return (
-    <Card className="flex items-center gap-3 p-4">
-      <span
-        className="flex h-9 w-9 items-center justify-center rounded-full"
-        style={{ background: "var(--sunken, var(--surface-sunken))", color: tone ?? "var(--brand)" }}
-      >
-        {icon}
-      </span>
-      <div>
-        <p className="tnum text-[20px] font-semibold leading-none" style={{ color: tone ?? "var(--ink)" }}>
-          {value}
-        </p>
-        <p className="mt-1 text-[12px] text-ink-3">{label}</p>
-      </div>
-    </Card>
-  );
-}
-
-/* ── การ์ดข้อเสนอ ─────────────────────────────────────────────────────── */
-
-function ProposalCard({ proposal, onOpenResolution }: { proposal: Proposal; onOpenResolution: (id: string) => void }) {
+/** Modal ให้ผู้ใช้เลือก/ระบุฝ่ายที่รับผิดชอบ (User Annotation) */
+function AnnotateDepartmentModal({
+  open,
+  onClose,
+  resolution,
+}: {
+  open: boolean;
+  onClose: () => void;
+  resolution: Resolution;
+}) {
   const t = useT();
   const { db } = useApp();
-  const target = db.resolutions.find((r) => r.id === proposal.resolution_id);
-  const decided = proposal.decision !== "pending";
+  const [selectedIds, setSelectedIds] = useState<Uuid[]>(resolution.assignee_ids);
 
-  /* ฟอร์มแก้ไขก่อนยอมรับ — ทุกอย่างที่ AI ผลิตต้องแก้ได้ (FR-M9-02) */
-  const [text, setText] = useState(proposal.title);
-  const [due, setDue] = useState("");
-  const [assignees, setAssignees] = useState<Uuid[]>([]);
-  /* ตั้งใจไม่เลือกล่วงหน้า — ระบบบอกว่าไม่เดา ก็ต้องไม่เดาจริง ๆ ในช่องนี้ด้วย */
-  const [personId, setPersonId] = useState<string>("");
-  const [saveAlias, setSaveAlias] = useState(true);
+  // รายชื่อหน่วยงาน/ฝ่ายทั้งหมด
+  const deptList = Array.from(
+    new Set([
+      ...db.people.filter((p) => p.is_department).map((p) => p.full_name),
+      ...db.people.map((p) => p.department).filter(Boolean),
+    ])
+  );
+  const deptEntities = db.people.filter((p) => p.is_department);
+  const people = db.people.filter((p) => !p.is_department);
 
-  /* เบาะแสจากคำเรียกในห้องประชุม — alias ที่เคยยืนยันแล้วและโผล่ในช่วงเวลาใกล้กัน */
-  const aliasHint = (() => {
-    if (proposal.kind !== "speaker_identity") return null;
-    const segs = db.segments.filter((s) => s.meeting_id === proposal.meeting_id);
-    for (const a of db.aliases) {
-      if (!proposal.candidate_person_ids?.includes(a.person_id)) continue;
-      if (segs.some((s) => s.text.includes(a.alias))) {
-        return { alias: a.alias, person_id: a.person_id, confidence: a.confidence };
+  // หาฝ่ายปัจจุบันที่เลือกอยู่
+  const currentSelectedDept = () => {
+    for (const id of selectedIds) {
+      const p = db.people.find((x) => x.id === id);
+      if (p) {
+        if (p.is_department) return p.full_name;
+        if (p.department) return p.department;
       }
     }
-    return null;
-  })();
-
-  const lowConfidence = proposal.confidence < 0.75;
-
-  return (
-    <div className={cn("px-5 py-4", decided && "bg-surface-2 opacity-70")}>
-      <div className="flex flex-wrap items-center gap-2">
-        <KindBadge kind={proposal.kind} />
-        {lowConfidence && !decided && (
-          <Badge tone="warn">
-            <ShieldQuestion size={11} /> {t("lowConfidence")}
-          </Badge>
-        )}
-        <span className="ml-auto flex items-center gap-2">
-          <span className="text-[11.5px] text-ink-3">{t("confidence")}</span>
-          <ConfidenceBar value={proposal.confidence} />
-        </span>
-      </div>
-
-      {/* มติเดิมที่ถูกจับคู่ */}
-      {target && (
-        <button
-          onClick={() => onOpenResolution(target.id)}
-          className="mt-3 block w-full rounded-[var(--radius)] border border-line bg-surface-2 px-3.5 py-3 text-left hover:border-brand cursor-pointer"
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-[11.5px] text-brand">{target.ref_no}</span>
-            <StatusPill status={target.status} label={STATUS_LABEL_TH[target.status]} size="sm" />
-            {proposal.proposed_status && (
-              <>
-                <span className="text-ink-4">→</span>
-                <StatusPill status={proposal.proposed_status} label={STATUS_LABEL_TH[proposal.proposed_status]} size="sm" />
-              </>
-            )}
-          </div>
-          <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">{target.text}</p>
-        </button>
-      )}
-
-      {/* ข้อเสนอมติใหม่ — แก้ได้ก่อนยอมรับ */}
-      {proposal.kind === "new_resolution" && !decided && (
-        <div className="mt-3 space-y-3">
-          <Field label={t.pick("ข้อความมติที่จะบันทึก", "Resolution text")}>
-            <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} />
-          </Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label={t("assignee")}>
-              <Select
-                value={assignees[0] ?? ""}
-                onChange={(e) => setAssignees(e.target.value ? [e.target.value] : [])}
-              >
-                <option value="">{t.pick("— เลือกผู้รับผิดชอบ —", "— select —")}</option>
-                {db.people.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.full_name}
-                    {p.is_department ? " (หน่วยงาน)" : ""}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label={t("dueDate")}>
-              <Input type="date" value={due} onChange={(e) => setDue(e.target.value)} />
-            </Field>
-          </div>
-        </div>
-      )}
-      {proposal.kind === "new_resolution" && decided && (
-        <p className="mt-3 text-[13.5px] leading-relaxed text-ink-2">{proposal.title}</p>
-      )}
-
-      {/* ระบุตัวผู้พูด */}
-      {proposal.kind === "speaker_identity" && !decided && (
-        <div className="mt-3 space-y-3">
-          <p className="text-[13.5px] font-medium text-ink">
-            {t.pick("ระบบไม่มั่นใจว่า", "Unsure who")} <span className="font-mono">{proposal.speaker_label}</span>{" "}
-            {t.pick("คือใคร จึงไม่เดาให้", "is — so it will not guess")}
-          </p>
-          {aliasHint && (
-            <div className="flex items-start gap-2.5 rounded-[var(--radius)] bg-[var(--brand-soft)] px-3.5 py-2.5">
-              <UserCheck size={15} className="mt-0.5 shrink-0 text-brand" />
-              <p className="text-[12.5px] leading-relaxed text-ink-2">
-                {t.pick("ในที่ประชุมมีการเรียกว่า", "Heard the nickname")} <b>“{aliasHint.alias}”</b>{" "}
-                {t.pick("ซึ่งเคยยืนยันไว้ว่าหมายถึง", "previously confirmed as")}{" "}
-                <b>{personName(db, aliasHint.person_id)}</b>
-              </p>
-            </div>
-          )}
-          <Field label={t.pick("ผู้พูดคนนี้คือ", "This speaker is")}>
-            <Select value={personId} onChange={(e) => setPersonId(e.target.value)}>
-              <option value="">{t.pick("— เลือกบุคคล —", "— select —")}</option>
-              {db.people
-                .filter((p) => !p.is_department)
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.full_name} · {p.position}
-                  </option>
-                ))}
-            </Select>
-          </Field>
-          {aliasHint && (
-            <label className="flex cursor-pointer items-center gap-2.5 text-[12.5px] text-ink-2">
-              <input
-                type="checkbox"
-                checked={saveAlias}
-                onChange={(e) => setSaveAlias(e.target.checked)}
-                className="h-4 w-4 accent-[var(--brand)]"
-              />
-              {t.pick(`จำไว้ว่า “${aliasHint.alias}” หมายถึงคนนี้ จะได้ไม่ต้องถามอีก`, `Remember “${aliasHint.alias}” permanently`)}
-            </label>
-          )}
-        </div>
-      )}
-
-      {/* หลักฐาน */}
-      <EvidenceQuote
-        className="mt-3"
-        text={proposal.evidence_text}
-        meta={
-          <>
-            <span className="inline-flex items-center gap-1">
-              <Clock size={11} />
-              <span className="tnum font-mono">{formatTimecode(proposal.evidence_start_ms)}</span>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <MessageSquareQuote size={11} />
-              {t("evidence")}
-            </span>
-          </>
-        }
-      />
-
-      {/* ปุ่มตัดสิน */}
-      <div className="mt-3.5 flex flex-wrap items-center gap-2">
-        {decided ? (
-          <Badge tone={proposal.decision === "accepted" ? "ok" : "neutral"}>
-            {proposal.decision === "accepted" ? `✓ ${t.pick("ยืนยันแล้ว", "Accepted")}` : `✕ ${t.pick("ปฏิเสธแล้ว", "Rejected")}`}
-          </Badge>
-        ) : (
-          <>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() =>
-                decideProposal(proposal.id, "accepted", {
-                  text,
-                  assignee_ids: assignees,
-                  due_date: due || null,
-                  person_id: personId || null,
-                  save_alias: saveAlias && aliasHint ? aliasHint.alias : undefined,
-                })
-              }
-              disabled={proposal.kind === "speaker_identity" && !personId}
-            >
-              {proposal.proposed_status === "done"
-                ? t.pick("ยืนยันปิดมติ", "Confirm close")
-                : t("accept")}
-            </Button>
-            <Button size="sm" onClick={() => decideProposal(proposal.id, "rejected")}>
-              {t("reject")}
-            </Button>
-            {proposal.proposed_status === "done" && (
-              <span className="text-[12px] text-ink-3">
-                {t.pick("ระบบเสนอเท่านั้น — มติจะปิดก็ต่อเมื่อท่านกดปุ่มนี้", "Proposal only — closes when you press this")}
-              </span>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function KindBadge({ kind }: { kind: Proposal["kind"] }) {
-  const t = useT();
-  const map: Record<Proposal["kind"], { label: string; tone: "brand" | "ok" | "warn" | "seal" }> = {
-    status_change: { label: t.pick("จับคู่มติเดิม", "Matched existing"), tone: "ok" },
-    new_resolution: { label: t.pick("มติใหม่", "New resolution"), tone: "brand" },
-    speaker_identity: { label: t.pick("ระบุตัวผู้พูด", "Speaker identity"), tone: "warn" },
-    supersede: { label: t.pick("แทนที่มติเดิม", "Supersede"), tone: "seal" },
+    return "";
   };
-  const m = map[kind];
-  return <Badge tone={m.tone}>{m.label}</Badge>;
-}
 
-/* ── การจับคู่ผู้พูดกับบุคคลจริง (FR-M2-07) ──────────────────────────── */
+  const handleDeptChange = (deptName: string) => {
+    if (!deptName) {
+      setSelectedIds((prev) =>
+        prev.filter((id) => {
+          const p = db.people.find((x) => x.id === id);
+          return p && !p.is_department;
+        })
+      );
+      return;
+    }
+    // 1. หา department entity ตรงๆ
+    let target = db.people.find(
+      (p) => p.is_department && (p.full_name === deptName || p.department === deptName)
+    );
+    // 2. ถ้าไม่มี ให้หาตัวแทนบุคคลในฝ่ายนั้น
+    if (!target) {
+      target = db.people.find((p) => p.department === deptName || p.full_name === deptName);
+    }
 
-function SpeakerMapping({ meetingId }: { meetingId: string }) {
-  const t = useT();
-  const { db } = useApp();
-  const segments = db.segments.filter((s) => s.meeting_id === meetingId);
-  const labels = [...new Set(segments.map((s) => s.speaker_label))].sort();
+    if (target) {
+      setSelectedIds((prev) => {
+        const nonDeptIds = prev.filter((id) => {
+          const p = db.people.find((x) => x.id === id);
+          return p && !p.is_department && p.department !== deptName;
+        });
+        return [target.id, ...nonDeptIds];
+      });
+    }
+  };
+
+  const handlePersonChange = (personId: string) => {
+    if (!personId) return;
+    if (!selectedIds.includes(personId)) {
+      setSelectedIds((prev) => [...prev, personId]);
+    }
+  };
+
+  const removeAssignee = (id: Uuid) => {
+    setSelectedIds((prev) => prev.filter((x) => x !== id));
+  };
+
+  const save = () => {
+    updateResolution(
+      resolution.id,
+      { assignee_ids: selectedIds },
+      "ผู้ใช้ระบุฝ่ายรับผิดชอบในการตรวจทาน"
+    );
+    onClose();
+  };
 
   return (
-    <Card className="overflow-hidden">
-      <CardHead
-        title={t.pick("จับคู่ผู้พูดกับบุคคลในทะเบียน", "Map speakers to registered people")}
-        desc={t.pick(
-          "ทำครั้งเดียว ระบบจำ voice profile ต่อชุดการประชุม ครั้งหน้าจะเดาให้ล่วงหน้าและถามเฉพาะที่ไม่มั่นใจ",
-          "Map once — the voice profile is remembered for this series.",
-        )}
-      />
-      <div className="divide-y divide-[var(--line)]">
-        {labels.map((label) => {
-          const segs = segments.filter((s) => s.speaker_label === label);
-          const personId = segs[0]?.person_id ?? "";
-          const totalMs = segs.reduce((sum, s) => sum + (s.end_ms - s.start_ms), 0);
-          return (
-            <div key={label} className="flex flex-wrap items-center gap-4 px-5 py-4">
-              <div className="flex min-w-[190px] items-center gap-3">
-                <span
-                  className={cn(
-                    "flex h-9 w-9 items-center justify-center rounded-full",
-                    personId ? "bg-[var(--brand-soft)] text-brand" : "bg-[var(--warn-bg)] text-[var(--warn)]",
-                  )}
-                >
-                  <Mic size={16} />
-                </span>
-                <div>
-                  <p className="font-mono text-[13px] font-medium text-ink">{label}</p>
-                  <p className="tnum text-[11.5px] text-ink-3">
-                    {segs.length} {t.pick("ท่อน", "segments")} · {formatTimecode(totalMs)}
-                  </p>
-                </div>
-              </div>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t.pick("ระบุฝ่ายที่รับผิดชอบ", "Assign Responsible Department")}
+      desc={resolution.ref_no}
+      width="max-w-lg"
+      footer={
+        <>
+          <Button onClick={onClose}>{t("cancel")}</Button>
+          <Button variant="primary" onClick={save}>
+            {t("save")}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="rounded-[var(--radius)] bg-surface-2 p-3 text-[13px] text-ink-2">
+          “{resolution.text}”
+        </div>
 
-              <p className="hidden min-w-0 flex-1 truncate text-[12.5px] italic text-ink-3 lg:block">
-                “{segs[0]?.text}”
-              </p>
+        <Field label={t.pick("เลือกหน่วยงาน/ฝ่ายที่รับผิดชอบ", "Select Responsible Department")}>
+          <Select
+            value={currentSelectedDept()}
+            onChange={(e) => handleDeptChange(e.target.value)}
+          >
+            <option value="">{t.pick("— เลือกหน่วยงาน/ฝ่าย —", "— Select Department —")}</option>
+            {deptList.map((dept) => (
+              <option key={dept} value={dept}>
+                {dept}
+              </option>
+            ))}
+          </Select>
+        </Field>
 
-              <div className="w-[280px]">
-                <Select value={personId ?? ""} onChange={(e) => assignSpeaker(meetingId, label, e.target.value || null)}>
-                  <option value="">{t.pick("— ยังไม่ระบุ —", "— unassigned —")}</option>
-                  {db.people
-                    .filter((p) => !p.is_department)
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.full_name} · {p.position}
-                      </option>
-                    ))}
-                </Select>
-              </div>
+        <Field label={t.pick("หรือเลือกบุคคลผู้รับผิดชอบโดยตรง (ระบุเพิ่มได้ / ไม่บังคับ)", "Or Select Individual Assignee (Optional)")}>
+          <Select
+            value=""
+            onChange={(e) => handlePersonChange(e.target.value)}
+          >
+            <option value="">{t.pick("— เลือกบุคคลผู้รับผิดชอบ (ไม่จำเป็น) —", "— Select Person (Optional) —")}</option>
+            {people.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.full_name} {p.department ? `(${p.department})` : ""} {p.position ? `— ${p.position}` : ""}
+              </option>
+            ))}
+          </Select>
+        </Field>
+
+        {selectedIds.length > 0 && (
+          <div>
+            <label className="mb-2 block text-[12.5px] font-medium text-ink-3">
+              {t.pick("ผู้รับผิดชอบที่เลือกไว้:", "Selected Assignees:")}
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {selectedIds.map((id) => {
+                const person = db.people.find((p) => p.id === id);
+                if (!person) return null;
+                return (
+                  <span
+                    key={id}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-[var(--brand-soft)] px-3 py-1 text-[12.5px] font-medium text-brand"
+                  >
+                    {person.is_department ? <Building2 size={13} /> : <UserCheck size={13} />}
+                    <span>{person.full_name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAssignee(id)}
+                      className="ml-1 rounded-full p-0.5 hover:bg-brand/20 cursor-pointer"
+                      title={t.pick("นำออก", "Remove")}
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                );
+              })}
             </div>
-          );
-        })}
+          </div>
+        )}
       </div>
-    </Card>
+    </Modal>
   );
 }

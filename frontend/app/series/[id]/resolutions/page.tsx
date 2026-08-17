@@ -1,18 +1,17 @@
 "use client";
 
-/** M4/M6 — ทะเบียนมติของชุดการประชุม พร้อมตัวกรองตาม FR-M6-04 */
+/** ทะเบียนมติของชุดการประชุม พร้อมตัวกรองตาม 3 สถานะ: กำลังดำเนินการ, เสร็จ, เกินกำหนด */
 
 import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { AlertTriangle, Flag, ListChecks, Search, SlidersHorizontal } from "lucide-react";
+import { AlertTriangle, ListChecks, Search, SlidersHorizontal } from "lucide-react";
 import { PageBody, PageHeader } from "@/components/app-shell";
 import { ResolutionDrawer, ResolutionRow } from "@/components/resolution-detail";
 import { Badge, Button, Card, EmptyState, Input, Segmented, Select, cn } from "@/components/ui";
 import { useT } from "@/lib/i18n";
-import { STATUS_LABEL_TH, assigneeNames, isOpen, overdueDays, useApp } from "@/lib/store";
-import type { ResolutionStatus } from "@/lib/types";
+import { assigneeNames, overdueDays, useApp } from "@/lib/store";
 
-type Bucket = "all" | "open" | "overdue" | "flagged" | "done";
+type StageKey = "all" | "in_progress" | "done" | "overdue";
 type SortKey = "overdue" | "due" | "recent" | "ref";
 
 export default function ResolutionsPage() {
@@ -20,8 +19,8 @@ export default function ResolutionsPage() {
   const { db } = useApp();
   const seriesId = useParams<{ id: string }>().id;
 
-  const [bucket, setBucket] = useState<Bucket>("all");
-  const [status, setStatus] = useState<ResolutionStatus | "">("");
+  const [bucket, setBucket] = useState<StageKey>("all");
+  const [status, setStatus] = useState<StageKey | "">("");
   const [assignee, setAssignee] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("overdue");
@@ -31,19 +30,17 @@ export default function ResolutionsPage() {
 
   const buckets = {
     all: all.length,
-    open: all.filter(isOpen).length,
-    overdue: all.filter((r) => overdueDays(r) > 0).length,
-    flagged: all.filter((r) => r.postpone_count >= 3 && isOpen(r)).length,
+    in_progress: all.filter((r) => r.status !== "done" && overdueDays(r) === 0).length,
     done: all.filter((r) => r.status === "done").length,
+    overdue: all.filter((r) => overdueDays(r) > 0 && r.status !== "done").length,
   };
 
   const rows = all
     .filter((r) => {
-      if (bucket === "open" && !isOpen(r)) return false;
-      if (bucket === "overdue" && overdueDays(r) === 0) return false;
-      if (bucket === "flagged" && !(r.postpone_count >= 3 && isOpen(r))) return false;
-      if (bucket === "done" && r.status !== "done") return false;
-      if (status && r.status !== status) return false;
+      const activeStage = status || (bucket !== "all" ? bucket : "");
+      if (activeStage === "in_progress" && (r.status === "done" || overdueDays(r) > 0)) return false;
+      if (activeStage === "done" && r.status !== "done") return false;
+      if (activeStage === "overdue" && (overdueDays(r) === 0 || r.status === "done")) return false;
       if (assignee && !r.assignee_ids.includes(assignee)) return false;
       if (query.trim()) {
         const q = query.trim().toLowerCase();
@@ -73,19 +70,21 @@ export default function ResolutionsPage() {
       <PageHeader
         title={t("navResolutions")}
         desc={t.pick(
-          "มติทุกข้อในชุดการประชุมนี้ ไม่ว่าจะเกิดขึ้นในการประชุมครั้งไหน — คลิกเพื่อดูไทม์ไลน์และหลักฐานคำต่อคำ",
+          "มติทุกข้อในชุดการประชุมนี้ — คลิกเพื่อดูไทม์ไลน์และหลักฐานคำต่อคำ",
           "Every resolution in this series, regardless of which meeting created it.",
         )}
         tabs={
           <Segmented
             value={bucket}
-            onChange={setBucket}
+            onChange={(val) => {
+              setBucket(val as StageKey);
+              if (status) setStatus("");
+            }}
             options={[
               { value: "all", label: t("all"), count: buckets.all },
-              { value: "open", label: t("statOpen"), count: buckets.open },
-              { value: "overdue", label: t("statOverdue"), count: buckets.overdue },
-              { value: "flagged", label: t.pick("เลื่อนซ้ำ", "Flagged"), count: buckets.flagged },
-              { value: "done", label: t("statDone"), count: buckets.done },
+              { value: "in_progress", label: t.pick("กำลังดำเนินการ", "In Progress"), count: buckets.in_progress },
+              { value: "done", label: t.pick("เสร็จ", "Done"), count: buckets.done },
+              { value: "overdue", label: t.pick("เกินกำหนด", "Overdue"), count: buckets.overdue },
             ]}
           />
         }
@@ -103,14 +102,12 @@ export default function ResolutionsPage() {
             />
           </div>
 
-          <div className="w-[168px]">
-            <Select value={status} onChange={(e) => setStatus(e.target.value as ResolutionStatus | "")}>
+          <div className="w-[180px]">
+            <Select value={status} onChange={(e) => setStatus(e.target.value as StageKey | "")}>
               <option value="">{t("status")}: {t("all")}</option>
-              {(Object.keys(STATUS_LABEL_TH) as ResolutionStatus[]).map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_LABEL_TH[s]}
-                </option>
-              ))}
+              <option value="in_progress">{t.pick("กำลังดำเนินการ", "In Progress")}</option>
+              <option value="done">{t.pick("เสร็จ", "Done")}</option>
+              <option value="overdue">{t.pick("เกินกำหนด", "Overdue")}</option>
             </Select>
           </div>
 
@@ -158,11 +155,6 @@ export default function ResolutionsPage() {
           {buckets.overdue > 0 && (
             <Badge tone="danger">
               <AlertTriangle size={11} /> {buckets.overdue} {t("statOverdue")}
-            </Badge>
-          )}
-          {buckets.flagged > 0 && (
-            <Badge tone="warn">
-              <Flag size={11} /> {buckets.flagged} {t.pick("เลื่อนซ้ำ", "flagged")}
             </Badge>
           )}
         </div>

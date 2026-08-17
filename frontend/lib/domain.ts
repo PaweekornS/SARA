@@ -59,12 +59,17 @@ const THAI_MONTHS = [
   "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
 ];
 
+const THAI_MONTHS_SHORT = [
+  "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+  "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
+];
+
 /** พ.ศ. = ค.ศ. + 543 ตามระเบียบสารบรรณ */
 export function formatThaiDate(iso: string, short = false) {
   if (!iso) return "-";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const month = short ? `${THAI_MONTHS[d.getMonth()].slice(0, 3)}.` : THAI_MONTHS[d.getMonth()];
+  const month = short ? THAI_MONTHS_SHORT[d.getMonth()] : THAI_MONTHS[d.getMonth()];
   return `${d.getDate()} ${month} ${d.getFullYear() + 543}`;
 }
 

@@ -29,25 +29,56 @@ const SER2 = "ser-acad-2569";
 /* ── บุคคล ─────────────────────────────────────────────────────────────── */
 
 export const P = {
+  // สำนักผู้อำนวยการ
+  deptDirectorate: "dep-directorate",
   chair: "per-chair",
   deputy: "per-deputy",
+
+  // ฝ่ายบริหารงานทั่วไป
+  deptAdmin: "dep-admin",
   secretary: "per-sec",
-  it: "per-it",
-  supply: "per-supply",
-  finance: "per-finance",
-  academic: "per-academic",
-  deptSupply: "dep-supply",
+  adminOfficer: "per-admin-off",
+
+  // ฝ่ายเทคโนโลยีสารสนเทศ
   deptIt: "dep-it",
+  it: "per-it",
+  itOfficer: "per-it-off",
+
+  // ฝ่ายพัสดุ
+  deptSupply: "dep-supply",
+  supply: "per-supply",
+  supplyOfficer: "per-supply-off",
+
+  // ฝ่ายการเงินและบัญชี
+  deptFinance: "dep-finance",
+  finance: "per-finance",
+  financeOfficer: "per-fin-off",
+
+  // ฝ่ายวิชาการ
+  deptAcademic: "dep-academic",
+  academic: "per-academic",
+  academicOfficer: "per-acad-off",
 } as const;
 
 const people: Person[] = [
+  // ── 1. สำนักผู้อำนวยการ ────────────────────────────────────────────────
+  {
+    id: P.deptDirectorate,
+    org_id: ORG_ID,
+    full_name: "สำนักผู้อำนวยการ",
+    position: "หน่วยงาน",
+    department: "สำนักผู้อำนวยการ",
+    email: "test01@gmail.com",
+    is_active: true,
+    is_department: true,
+  },
   {
     id: P.chair,
     org_id: ORG_ID,
     full_name: "นายธนกฤต อารีวงศ์",
     position: "ผู้อำนวยการ (ประธานที่ประชุม)",
     department: "สำนักผู้อำนวยการ",
-    email: "thanakrit.a@demo.go.th",
+    email: "test01@gmail.com",
     is_active: true,
     is_department: false,
   },
@@ -57,9 +88,21 @@ const people: Person[] = [
     full_name: "นายสุรชัย ทองอินทร์",
     position: "รองผู้อำนวยการ",
     department: "สำนักผู้อำนวยการ",
-    email: "surachai.t@demo.go.th",
+    email: "test02@gmail.com",
     is_active: true,
     is_department: false,
+  },
+
+  // ── 2. ฝ่ายบริหารงานทั่วไป ───────────────────────────────────────────
+  {
+    id: P.deptAdmin,
+    org_id: ORG_ID,
+    full_name: "ฝ่ายบริหารงานทั่วไป",
+    position: "หน่วยงาน",
+    department: "ฝ่ายบริหารงานทั่วไป",
+    email: "test01@gmail.com",
+    is_active: true,
+    is_department: true,
   },
   {
     id: P.secretary,
@@ -67,9 +110,31 @@ const people: Person[] = [
     full_name: "นางสาวปรียานุช วัฒนสิน",
     position: "หัวหน้าฝ่ายบริหารงานทั่วไป (เลขานุการที่ประชุม)",
     department: "ฝ่ายบริหารงานทั่วไป",
-    email: "preeyanuch.w@demo.go.th",
+    email: "test01@gmail.com",
     is_active: true,
     is_department: false,
+  },
+  {
+    id: P.adminOfficer,
+    org_id: ORG_ID,
+    full_name: "นายณัฐวุฒิ สิทธิชัย",
+    position: "เจ้าหน้าที่บริหารงานทั่วไปปฏิบัติการ",
+    department: "ฝ่ายบริหารงานทั่วไป",
+    email: "test02@gmail.com",
+    is_active: true,
+    is_department: false,
+  },
+
+  // ── 3. ฝ่ายเทคโนโลยีสารสนเทศ ──────────────────────────────────────────
+  {
+    id: P.deptIt,
+    org_id: ORG_ID,
+    full_name: "ฝ่ายเทคโนโลยีสารสนเทศ",
+    position: "หน่วยงาน",
+    department: "ฝ่ายเทคโนโลยีสารสนเทศ",
+    email: "test02@gmail.com",
+    is_active: true,
+    is_department: true,
   },
   {
     id: P.it,
@@ -77,9 +142,31 @@ const people: Person[] = [
     full_name: "นายวีระพงษ์ ศรีสมบูรณ์",
     position: "หัวหน้าฝ่ายเทคโนโลยีสารสนเทศ",
     department: "ฝ่ายเทคโนโลยีสารสนเทศ",
-    email: "weerapong.s@demo.go.th",
+    email: "test02@gmail.com",
     is_active: true,
     is_department: false,
+  },
+  {
+    id: P.itOfficer,
+    org_id: ORG_ID,
+    full_name: "นายชานนท์ วงศ์สุวรรณ",
+    position: "นักวิชาการคอมพิวเตอร์ชำนาญการ",
+    department: "ฝ่ายเทคโนโลยีสารสนเทศ",
+    email: "test01@gmail.com",
+    is_active: true,
+    is_department: false,
+  },
+
+  // ── 4. ฝ่ายพัสดุ ─────────────────────────────────────────────────────
+  {
+    id: P.deptSupply,
+    org_id: ORG_ID,
+    full_name: "ฝ่ายพัสดุ",
+    position: "หน่วยงาน",
+    department: "ฝ่ายพัสดุ",
+    email: "test01@gmail.com",
+    is_active: true,
+    is_department: true,
   },
   {
     id: P.supply,
@@ -87,9 +174,31 @@ const people: Person[] = [
     full_name: "นางกาญจนา พูลสวัสดิ์",
     position: "หัวหน้าฝ่ายพัสดุ",
     department: "ฝ่ายพัสดุ",
-    email: "kanjana.p@demo.go.th",
+    email: "test01@gmail.com",
     is_active: true,
     is_department: false,
+  },
+  {
+    id: P.supplyOfficer,
+    org_id: ORG_ID,
+    full_name: "นายเอกชัย ภักดี",
+    position: "เจ้าหน้าที่พัสดุชำนาญการ",
+    department: "ฝ่ายพัสดุ",
+    email: "test02@gmail.com",
+    is_active: true,
+    is_department: false,
+  },
+
+  // ── 5. ฝ่ายการเงินและบัญชี ───────────────────────────────────────────
+  {
+    id: P.deptFinance,
+    org_id: ORG_ID,
+    full_name: "ฝ่ายการเงินและบัญชี",
+    position: "หน่วยงาน",
+    department: "ฝ่ายการเงินและบัญชี",
+    email: "test02@gmail.com",
+    is_active: true,
+    is_department: true,
   },
   {
     id: P.finance,
@@ -97,9 +206,31 @@ const people: Person[] = [
     full_name: "นางสาวศิริพร เจริญผล",
     position: "หัวหน้าฝ่ายการเงินและบัญชี",
     department: "ฝ่ายการเงินและบัญชี",
-    email: "siriporn.j@demo.go.th",
+    email: "test02@gmail.com",
     is_active: true,
     is_department: false,
+  },
+  {
+    id: P.financeOfficer,
+    org_id: ORG_ID,
+    full_name: "นางสาวกมลวรรณ สุขสม",
+    position: "นักวิชาการเงินและบัญชีปฏิบัติการ",
+    department: "ฝ่ายการเงินและบัญชี",
+    email: "test01@gmail.com",
+    is_active: true,
+    is_department: false,
+  },
+
+  // ── 6. ฝ่ายวิชาการ ───────────────────────────────────────────────────
+  {
+    id: P.deptAcademic,
+    org_id: ORG_ID,
+    full_name: "ฝ่ายวิชาการ",
+    position: "หน่วยงาน",
+    department: "ฝ่ายวิชาการ",
+    email: "test01@gmail.com",
+    is_active: true,
+    is_department: true,
   },
   {
     id: P.academic,
@@ -107,29 +238,19 @@ const people: Person[] = [
     full_name: "นายกิตติศักดิ์ แสนสุข",
     position: "หัวหน้าฝ่ายวิชาการ",
     department: "ฝ่ายวิชาการ",
-    email: "kittisak.s@demo.go.th",
+    email: "test01@gmail.com",
     is_active: true,
     is_department: false,
   },
   {
-    id: P.deptSupply,
+    id: P.academicOfficer,
     org_id: ORG_ID,
-    full_name: "ฝ่ายพัสดุ",
-    position: "หน่วยงาน",
-    department: "ฝ่ายพัสดุ",
-    email: "supply@demo.go.th",
+    full_name: "นางสาวนภัสสร รุ่งเรือง",
+    position: "นักวิชาการแผนและนโยบายชำนาญการ",
+    department: "ฝ่ายวิชาการ",
+    email: "test02@gmail.com",
     is_active: true,
-    is_department: true,
-  },
-  {
-    id: P.deptIt,
-    org_id: ORG_ID,
-    full_name: "ฝ่ายเทคโนโลยีสารสนเทศ",
-    position: "หน่วยงาน",
-    department: "ฝ่ายเทคโนโลยีสารสนเทศ",
-    email: "it@demo.go.th",
-    is_active: true,
-    is_department: true,
+    is_department: false,
   },
 ];
 
@@ -182,7 +303,6 @@ const series: MeetingSeries[] = [
 const donePipeline: Meeting["pipeline"] = [
   { stage: "upload", state: "ok" },
   { stage: "asr", state: "ok", detail: "AI4Thai Partii · WER 8.4%" },
-  { stage: "diarize", state: "ok", detail: "pyannote 3.1 · 5 ผู้พูด" },
   { stage: "extract", state: "ok" },
   { stage: "done", state: "ok" },
 ];

@@ -151,8 +151,6 @@ function CreateSeriesModal({ open, onClose }: { open: boolean; onClose: () => vo
   const [name, setName] = useState("");
   const [committee, setCommittee] = useState("คณะกรรมการบริหาร");
   const [fiscalYear, setFiscalYear] = useState(2569);
-  const [cadence, setCadence] = useState<Cadence>("monthly");
-  const [nextDate, setNextDate] = useState("");
   const [members, setMembers] = useState<string[]>([]);
 
   const submit = () => {
@@ -162,8 +160,8 @@ function CreateSeriesModal({ open, onClose }: { open: boolean; onClose: () => vo
       committee_type: committee,
       fiscal_year: fiscalYear,
       agenda_template_id: "tpl-official-th",
-      cadence,
-      next_meeting_date: nextDate || null,
+      cadence: "monthly",
+      next_meeting_date: null,
       member_ids: members,
     });
     setName("");
@@ -207,18 +205,6 @@ function CreateSeriesModal({ open, onClose }: { open: boolean; onClose: () => vo
               onChange={(e) => setFiscalYear(Number(e.target.value))}
               className="tnum"
             />
-          </Field>
-          <Field label={t.pick("รอบการประชุม", "Cadence")}>
-            <Select value={cadence} onChange={(e) => setCadence(e.target.value as Cadence)}>
-              {(Object.keys(CADENCE_LABEL) as Cadence[]).map((c) => (
-                <option key={c} value={c}>
-                  {CADENCE_LABEL[c][t.lang === "th" ? 0 : 1]}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label={t.pick("วันประชุมครั้งถัดไป", "Next meeting date")}>
-            <Input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)} />
           </Field>
         </div>
 

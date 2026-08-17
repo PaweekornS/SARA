@@ -10,10 +10,7 @@ import {
   ArrowRight,
   CalendarClock,
   CheckCircle2,
-  Flag,
   ListChecks,
-  Printer,
-  ScrollText,
   Timer,
   Upload,
 } from "lucide-react";
@@ -56,23 +53,9 @@ export default function SeriesDashboardPage() {
   const stats = seriesStats(db, seriesId);
   const resolutions = db.resolutions.filter((r) => r.series_id === seriesId);
   const overdue = resolutions.filter((r) => overdueDays(r) > 0).sort((a, b) => overdueDays(b) - overdueDays(a));
-  const flagged = resolutions.filter((r) => r.postpone_count >= 3 && isOpen(r));
   const meetings = db.meetings.filter((m) => m.series_id === seriesId).sort((a, b) => b.sequence_no - a.sequence_no);
   const lastMeeting = meetings[0];
   const nextIn = series.next_meeting_date ? daysUntil(series.next_meeting_date) : null;
-
-  /* ภาระงานแยกตามผู้รับผิดชอบ — ประธานอยากรู้ว่า "ใครค้าง" ไม่ใช่แค่ "ค้างกี่ข้อ" */
-  const load = new Map<string, { name: string; open: number; overdue: number }>();
-  for (const r of resolutions.filter(isOpen)) {
-    for (const p of assigneeNames(db, r)) {
-      const cur = load.get(p.id) ?? { name: p.full_name, open: 0, overdue: 0 };
-      cur.open += 1;
-      if (overdueDays(r) > 0) cur.overdue += 1;
-      load.set(p.id, cur);
-    }
-  }
-  const loadRows = [...load.values()].sort((a, b) => b.overdue - a.overdue || b.open - a.open);
-  const maxLoad = Math.max(1, ...loadRows.map((l) => l.open));
 
   const statusCounts = (Object.keys(STATUS_LABEL_TH) as ResolutionStatus[])
     .map((s) => ({ status: s, count: resolutions.filter((r) => r.status === s).length }))
@@ -98,24 +81,15 @@ export default function SeriesDashboardPage() {
             : undefined
         }
         actions={
-          <>
-            <Button icon={<Printer size={15} />} onClick={() => window.print()}>
-              {t("exportPdf")}
-            </Button>
-            <Link href={`/series/${seriesId}/agenda`}>
-              <Button icon={<ScrollText size={15} />}>{t("generateAgenda")}</Button>
-            </Link>
-            {/* งานที่เลขาฯ ทำบ่อยที่สุด ต้องอยู่ห่างจากหน้าแรกแค่คลิกเดียว */}
-            <Button variant="primary" icon={<Upload size={15} />} onClick={() => setUploadOpen(true)}>
-              {t("uploadMeeting")}
-            </Button>
-          </>
+          <Button variant="primary" icon={<Upload size={15} />} onClick={() => setUploadOpen(true)}>
+            {t("uploadMeeting")}
+          </Button>
         }
       />
 
       <PageBody className="space-y-5">
-        {/* แถวสถิติ — FR-M6-01, 02 */}
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {/* แถวสถิติ — มติทั้งหมด, กำลังดำเนินการ, เกินกำหนด */}
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <StatTile label={t("statTotal")} value={stats.total} icon={<ListChecks size={15} />} />
           <StatTile
             label={t("statOpen")}
@@ -129,17 +103,6 @@ export default function SeriesDashboardPage() {
             value={stats.overdue}
             tone={stats.overdue > 0 ? "danger" : "ok"}
             icon={<AlertTriangle size={15} />}
-          />
-          <StatTile
-            label={t("closureRate")}
-            value={stats.closureRate}
-            unit="%"
-            tone="ok"
-            icon={<CheckCircle2 size={15} />}
-            hint={t.pick(
-              `เวลาเฉลี่ยจากมติถึงปิด ${stats.avgDaysToClose} วัน`,
-              `Avg ${stats.avgDaysToClose} days to close`,
-            )}
           />
         </section>
 
@@ -176,94 +139,29 @@ export default function SeriesDashboardPage() {
           </div>
         </Card>
 
-        <div className="grid items-start gap-5 lg:grid-cols-[1.35fr_1fr]">
-          {/* มติค้าง เรียงตามวันที่เกิน — FR-M6-03 */}
-          <Card className="overflow-hidden">
-            <CardHead
-              title={t("overdueList")}
-              desc={t.pick("เรื่องที่อยู่บนสุดคือเรื่องที่องค์กรลืมนานที่สุด", "Top items are what the org has forgotten longest")}
-              right={
-                <Link href={`/series/${seriesId}/resolutions`}>
-                  <Button size="sm" variant="ghost" icon={<ArrowRight size={14} />}>
-                    {t("navResolutions")}
-                  </Button>
-                </Link>
-              }
-            />
-            {overdue.length === 0 ? (
-              <EmptyState icon={<CheckCircle2 size={20} />} title={t("noOverdue")} />
-            ) : (
-              <div>
-                {overdue.map((r) => (
-                  <ResolutionRow key={r.id} resolution={r} onOpen={() => setOpenId(r.id)} compact />
-                ))}
-              </div>
-            )}
-          </Card>
-
-          <div className="space-y-5">
-            {/* ภาระต่อคน — FR-M6-04 */}
-            <Card className="overflow-hidden">
-              <CardHead title={t("byAssignee")} />
-              <div className="space-y-3 px-5 py-4">
-                {loadRows.length === 0 && <p className="text-[13px] text-ink-3">{t("none")}</p>}
-                {loadRows.map((l) => (
-                  <div key={l.name}>
-                    <div className="flex items-baseline justify-between gap-2 text-[13px]">
-                      <span className="truncate text-ink-2">{l.name}</span>
-                      <span className="tnum shrink-0 font-medium text-ink">
-                        {l.open}
-                        {l.overdue > 0 && <span className="ml-1.5 text-[12px] text-[var(--danger)]">({l.overdue} เกิน)</span>}
-                      </span>
-                    </div>
-                    <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-sunken">
-                      <span
-                        className="shrink-0"
-                        style={{ width: `${((l.open - l.overdue) / maxLoad) * 100}%`, background: "var(--brand)" }}
-                      />
-                      <span
-                        className="shrink-0"
-                        style={{ width: `${(l.overdue / maxLoad) * 100}%`, background: "var(--danger)" }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            {/* เลื่อนซ้ำ — FR-M6-05 */}
-            <Card className="overflow-hidden">
-              <CardHead
-                title={t("flaggedList")}
-                desc={t.pick("สัญญาณว่าเรื่องนี้จะไม่เสร็จถ้าไม่เปลี่ยนวิธี", "A signal this will not finish as-is")}
-              />
-              {flagged.length === 0 ? (
-                <EmptyState icon={<Flag size={18} />} title={t.pick("ไม่มีมติที่ถูกเลื่อนซ้ำ", "None flagged")} />
-              ) : (
-                flagged.map((r) => (
-                  <button
-                    key={r.id}
-                    onClick={() => setOpenId(r.id)}
-                    className="flex w-full items-start gap-3 border-b border-line px-4 py-3.5 text-left last:border-b-0 hover:bg-surface-2 cursor-pointer"
-                  >
-                    <span className="mt-0.5 shrink-0 text-[var(--warn)]">
-                      <Flag size={15} />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="line-clamp-2 text-[13px] leading-relaxed text-ink">{r.text}</p>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                        <Badge tone="warn">
-                          {t("postponedTimes")} {r.postpone_count} {t("times")}
-                        </Badge>
-                        <StatusPill status={r.status} label={STATUS_LABEL_TH[r.status]} size="sm" />
-                      </div>
-                    </div>
-                  </button>
-                ))
-              )}
-            </Card>
-          </div>
-        </div>
+        {/* มติค้าง เรียงตามวันที่เกิน */}
+        <Card className="overflow-hidden">
+          <CardHead
+            title={t("overdueList")}
+            desc={t.pick("เรื่องที่อยู่บนสุดคือเรื่องที่องค์กรลืมนานที่สุด", "Top items are what the org has forgotten longest")}
+            right={
+              <Link href={`/series/${seriesId}/resolutions`}>
+                <Button size="sm" variant="ghost" icon={<ArrowRight size={14} />}>
+                  {t("navResolutions")}
+                </Button>
+              </Link>
+            }
+          />
+          {overdue.length === 0 ? (
+            <EmptyState icon={<CheckCircle2 size={20} />} title={t("noOverdue")} />
+          ) : (
+            <div>
+              {overdue.map((r) => (
+                <ResolutionRow key={r.id} resolution={r} onOpen={() => setOpenId(r.id)} compact />
+              ))}
+            </div>
+          )}
+        </Card>
 
         {/* แถบการประชุมล่าสุด */}
         <Card className="overflow-hidden">

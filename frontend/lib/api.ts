@@ -25,6 +25,10 @@ export async function retryMeeting(id: Uuid) {
   store.retryMeeting(id);
 }
 
+export async function reuploadMeeting(id: Uuid, file: File, simulate_asr_failure: boolean = false) {
+  return store.reuploadMeeting(id, file, simulate_asr_failure);
+}
+
 export async function approveMeeting(id: Uuid) {
   store.setMeetingStatus(id, "approved");
 }

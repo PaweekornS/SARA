@@ -59,7 +59,7 @@ export type MeetingStatus =
   | "distributed";
 
 /** FR-M2-03 ขั้นตอนของ background job */
-export type PipelineStage = "upload" | "asr" | "diarize" | "extract" | "done";
+export type PipelineStage = "upload" | "asr" | "extract" | "done";
 export type StageState = "pending" | "running" | "ok" | "failed";
 
 export interface PipelineStep {
@@ -81,6 +81,7 @@ export interface Meeting {
   source_kind: "audio" | "transcript";
   status: MeetingStatus;
   pipeline: PipelineStep[];
+  summary?: string | null;
   created_at: string;
   approved_at?: string | null;
   approved_by?: string | null;

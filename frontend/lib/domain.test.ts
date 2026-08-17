@@ -87,7 +87,7 @@ test("เอกสารราชการใช้เลขไทย และ�
 
 test("วันที่แสดงเป็น พ.ศ. และ timecode ไม่พังเมื่อไม่มีค่า", () => {
   assert.equal(formatThaiDate("2026-07-18"), "18 กรกฎาคม 2569");
-  assert.equal(formatThaiDate("2026-07-18", true), "18 กรก. 2569");
+  assert.equal(formatThaiDate("2026-07-18", true), "18 ก.ค. 2569");
   assert.equal(formatThaiDate(""), "-");
   assert.equal(formatTimecode(null), "--:--");
   assert.equal(formatTimecode(688_000), "11:28");

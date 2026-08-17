@@ -103,6 +103,18 @@ export function retryMeeting(id: Uuid, actor: string) {
   return request(`/meetings/${id}/retry`, { method: "POST", actor });
 }
 
+export function reuploadMeeting(
+  id: Uuid,
+  file: File,
+  simulate_asr_failure: boolean = false,
+  actor: string,
+) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("simulate_asr_failure", String(Boolean(simulate_asr_failure)));
+  return request(`/meetings/${id}/upload`, { method: "POST", body: form, actor });
+}
+
 export function assignSpeaker(
   meetingId: Uuid,
   speaker_label: string,

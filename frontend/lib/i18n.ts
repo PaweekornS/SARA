@@ -64,6 +64,7 @@ const dict = {
   changeStatus: ["เปลี่ยนสถานะ", "Change status"],
   postponedTimes: ["เลื่อนกำหนดมาแล้ว", "Postponed"],
   times: ["ครั้ง", "times"],
+  items: ["ข้อ", "items"],
   noResolutions: ["ไม่พบมติตามเงื่อนไขที่เลือก", "No resolutions match these filters"],
 
   /* meetings */

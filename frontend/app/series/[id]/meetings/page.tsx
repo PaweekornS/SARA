@@ -39,8 +39,8 @@ export default function MeetingsPage() {
       <PageHeader
         title={t("navMeetings")}
         desc={t.pick(
-          "อัปโหลดไฟล์เสียงของการประชุมครั้งใหม่ ระบบจะถอดเสียง แยกผู้พูด สกัดมติ และจับคู่กับมติค้างของชุดนี้ให้",
-          "Upload a new recording — SARA transcribes, diarizes, extracts resolutions and links them to open items.",
+          "อัปโหลดไฟล์เสียงของการประชุมครั้งใหม่ ระบบจะถอดเสียง สรุปเนื้อหา และสกัดมติให้อัตโนมัติ",
+          "Upload a new recording — SARA transcribes, summarizes, and extracts resolutions automatically.",
         )}
         actions={
           <Button variant="primary" icon={<Plus size={16} />} onClick={() => setUploadOpen(true)}>
