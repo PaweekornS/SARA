@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #  TimelineEntry มีฟิลด์ชื่อ "date" ซึ่งบังชื่อ type date ในขอบเขตของคลาส
 #  จน pydantic ตีความ annotation เพี้ยนไปเป็น None เท่านั้น — ใช้ชื่อสำรองแทน
@@ -97,8 +97,8 @@ class SeriesOut(ORMModel):
 # ── การประชุม ───────────────────────────────────────────────────────────
 
 class PipelineStep(BaseModel):
-    stage: Literal["upload", "asr", "diarize", "extract", "done"]
-    state: Literal["pending", "running", "ok", "failed"]
+    stage: str
+    state: str = "pending"
     detail: Optional[str] = None
     error: Optional[str] = None
 
@@ -118,6 +118,7 @@ class MeetingOut(ORMModel):
     fiscal_year: int
     meeting_date: date
     title: str = ""
+    summary: Optional[str] = ""
     audio_uri: Optional[str] = None
     source_kind: str
     status: str
@@ -125,6 +126,18 @@ class MeetingOut(ORMModel):
     created_at: datetime
     approved_at: Optional[datetime] = None
     approved_by: Optional[str] = None
+
+    @field_validator("pipeline", mode="before")
+    @classmethod
+    def filter_legacy_pipeline(cls, value):
+        if isinstance(value, list):
+            return [
+                step
+                for step in value
+                if (isinstance(step, dict) and step.get("stage") != "diarize")
+                or (isinstance(step, PipelineStep) and step.stage != "diarize")
+            ]
+        return value
 
 
 class SegmentOut(ORMModel):
@@ -312,14 +325,44 @@ class Citation(BaseModel):
     segment_id: Optional[UUID] = None
     resolution_id: Optional[UUID] = None
     start_ms: Optional[int] = None
-    quote: str
+    meeting_seq: Optional[int] = None
+    text: Optional[str] = None
+    quote: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_quote_and_text(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "text" in data and not data.get("quote"):
+                data["quote"] = data["text"]
+            elif "quote" in data and not data.get("text"):
+                data["text"] = data["quote"]
+        return data
 
 
 class TimelineEntry(BaseModel):
     meeting_id: Optional[UUID] = None
+    meeting_seq: Optional[int] = None
+    meeting_date: Optional[str] = None
     date: Optional[DateOnly] = None
-    label: str
-    detail: str
+    action: Optional[str] = None
+    label: str = ""
+    detail: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def sync_label_and_action(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "action" in data and not data.get("label"):
+                data["label"] = data["action"]
+            elif "label" in data and not data.get("action"):
+                data["action"] = data["label"]
+            if "meeting_date" in data and not data.get("date"):
+                try:
+                    data["date"] = data["meeting_date"]
+                except Exception:
+                    pass
+        return data
 
 
 class Question(BaseModel):

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,9 +19,22 @@ from app.db.models import ActionStatus, Organization, OutboundAction, Person
 from app.db.session import get_db
 from app.schemas import ActionOut
 from app.services.resolutions import audit, get_or_404, utcnow
-from app.workers.tasks import send_outbound_action_task
+from app.workers.tasks import _send_action, send_outbound_action_task
+
+# ── Global Variables & Constants ─────────────────────────────────────────────
 
 router = APIRouter(prefix="/actions", tags=["Outbound actions"])
+
+
+# ── Functions & Route Handlers ───────────────────────────────────────────────
+
+def _dispatch_action(action_id: UUID, bg_tasks: BackgroundTasks):
+    """ส่งออกผ่าน Celery คิว หรือส่งตรงผ่าน FastAPI BackgroundTasks"""
+    try:
+        send_outbound_action_task.delay(str(action_id))
+    except Exception:
+        # Fallback หากไม่ได้รัน Celery Broker ให้ใช้ FastAPI BackgroundTasks ส่งสดทันที
+        bg_tasks.add_task(_send_action, action_id, None)
 
 
 @router.get("", response_model=list[ActionOut])
@@ -45,31 +58,27 @@ async def pending(db: AsyncSession = Depends(get_db)):
 @router.post("/{action_id}/approve", response_model=ActionOut)
 async def approve(
     action_id: UUID,
+    bg_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     org: Organization = Depends(current_org),
     actor: str = Depends(current_actor),
 ):
-    """อนุมัติแล้วส่งจริงผ่าน MCP — บันทึกทุกครั้งว่าใครอนุมัติ (FR-M7-09)"""
+    """อนุมัติแล้วส่งจริงผ่าน Direct SMTP/Email Engine — บันทึกทุกครั้งว่าใครอนุมัติ (FR-M7-09)"""
     action = await get_or_404(db, OutboundAction, action_id, "รายการส่งออก")
     if action.status != ActionStatus.PENDING_APPROVAL:
-        raise HTTPException(status_code=409, detail=f"รายการนี้อยู่ในสถานะ {action.status} แล้ว")
-
-    recipient = await db.get(Person, action.recipient_person_id) if action.recipient_person_id else None
-    if recipient is None or not recipient.email:
         raise HTTPException(
-            status_code=422,
-            detail="ผู้รับยังไม่มีอีเมลในทะเบียนบุคคล จึงส่งออกไม่ได้",
+            status_code=409,
+            detail=f"อนุมัติไม่ได้ — รายการอยู่ในสถานะ {action.status}",
         )
 
     action.status = ActionStatus.APPROVED
     action.approved_by = actor
-    await audit(db, org.id, actor, "approve_outbound_action", "outbound_action", action.id, action.subject)
+    action.approved_at = utcnow()
+    await audit(db, org.id, actor, "approve_action", "outbound_action", action.id, action.action_type)
     await db.commit()
-
-    #  ส่งจริงในเบื้องหลัง เพื่อไม่ให้ผู้ใช้ต้องรอ SMTP
-    send_outbound_action_task.delay(str(action.id))
-
     await db.refresh(action)
+
+    _dispatch_action(action.id, bg_tasks)
     return action
 
 
@@ -80,35 +89,36 @@ async def cancel(
     org: Organization = Depends(current_org),
     actor: str = Depends(current_actor),
 ):
+    """ยกเลิกก่อนส่ง"""
     action = await get_or_404(db, OutboundAction, action_id, "รายการส่งออก")
-    if action.status == ActionStatus.SENT:
-        raise HTTPException(status_code=409, detail="รายการนี้ส่งออกไปแล้ว ยกเลิกไม่ได้")
+    if action.status not in (ActionStatus.PENDING_APPROVAL, ActionStatus.FAILED):
+        raise HTTPException(status_code=409, detail=f"ยกเลิกไม่ได้ — รายการอยู่ในสถานะ {action.status}")
+
     action.status = ActionStatus.CANCELLED
-    await audit(db, org.id, actor, "cancel_outbound_action", "outbound_action", action.id, action.subject)
+    await audit(db, org.id, actor, "cancel_action", "outbound_action", action.id, action.action_type)
     await db.commit()
     await db.refresh(action)
     return action
 
 
 @router.post("/{action_id}/retry", response_model=ActionOut)
-async def retry(action_id: UUID, db: AsyncSession = Depends(get_db)):
+async def retry(
+    action_id: UUID,
+    bg_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    org: Organization = Depends(current_org),
+    actor: str = Depends(current_actor),
+):
+    """retry เมื่อส่งไม่สำเร็จ"""
     action = await get_or_404(db, OutboundAction, action_id, "รายการส่งออก")
     if action.status != ActionStatus.FAILED:
-        raise HTTPException(status_code=409, detail="ลองส่งใหม่ได้เฉพาะรายการที่ส่งไม่สำเร็จ")
+        raise HTTPException(status_code=409, detail=f"retry ได้เฉพาะรายการที่ failed (ปัจจุบัน {action.status})")
+
     action.status = ActionStatus.APPROVED
-    action.error = None
+    action.error_message = None
+    await audit(db, org.id, actor, "retry_action", "outbound_action", action.id, action.action_type)
     await db.commit()
-    send_outbound_action_task.delay(str(action.id))
     await db.refresh(action)
+
+    _dispatch_action(action.id, bg_tasks)
     return action
-
-
-@router.get("/{action_id}", response_model=ActionOut)
-async def get_action(action_id: UUID, db: AsyncSession = Depends(get_db)):
-    return await get_or_404(db, OutboundAction, action_id, "รายการส่งออก")
-
-
-def mark_sent(action: OutboundAction) -> None:
-    action.status = ActionStatus.SENT
-    action.sent_at = utcnow()
-    action.error = None

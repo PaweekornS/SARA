@@ -1,5 +1,13 @@
+"""
+Application Configuration Settings
+"""
+
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
+# ── Configuration Class ──────────────────────────────────────────────────────
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "SARA · ระบบสารบรรณการประชุมอัตโนมัติ"
@@ -22,11 +30,11 @@ class Settings(BaseSettings):
     ASR_URL: str = "https://tokenmind.pathumma.in.th"
     ASR_MODEL: str = "ptm-asr-1"
 
-    # MCP action layer
-    MCP_SERVER_URL: str = "http://localhost:8001/mcp"
+    # API Security
+    API_KEY: str = ""
 
-    # ไฟล์อัปโหลด — ของจริงควรเป็น object storage (FR-M10-06) ไม่ใช่ดิสก์ของ container
-    UPLOAD_DIR: str = "/tmp/sara-uploads"
+    # ไฟล์อัปโหลด — ใช้ shared volume ระหว่าง API และ Celery Workers
+    UPLOAD_DIR: str = "/data/uploads"
     MAX_UPLOAD_MB: int = 500
 
     # เอกสารต้นแบบขององค์กร ถ้ามีไฟล์อยู่ ระบบจะสร้าง .docx จากไฟล์นี้แทนเอกสารเปล่า
@@ -54,5 +62,7 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
+
+# ── Global Settings Instance ─────────────────────────────────────────────────
 
 settings = Settings()

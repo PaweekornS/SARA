@@ -1,3 +1,9 @@
+"""
+SARA Backend API Main Entrypoint
+"""
+
+from __future__ import annotations
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -7,16 +13,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import actions, agenda, meetings, people, public, resolutions, series
 from app.core.config import settings
 
+# ── Global Variables & Constants ─────────────────────────────────────────────
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# ── Lifespan & Application Setup ─────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    ไม่สร้างตารางอัตโนมัติแล้ว — schema จัดการด้วย Alembic (งานล้างหนี้ข้อ 4)
-    รัน `alembic upgrade head` ก่อนสตาร์ท ดู README ประกอบ
-    """
+    try:
+        from sqlalchemy import text
+        from app.db.session import engine
+
+        async with engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE meeting ADD COLUMN IF NOT EXISTS summary TEXT;"))
+    except Exception as exc:
+        logger.warning("DB auto-migration check: %s", exc)
+
     logger.info("SARA API พร้อมทำงาน")
     yield
     logger.info("ปิดระบบ")
@@ -26,8 +41,6 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     version="2.0.0",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    #  docs_url/redoc_url ใช้ค่าเริ่มต้นของ FastAPI คือ /docs และ /redoc
-    #  router ทั้งหมดอยู่ใต้ /api อยู่แล้ว จึงไม่ชนกัน
     lifespan=lifespan,
 )
 
@@ -39,9 +52,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for router in (series.router, meetings.router, resolutions.router, agenda.router, actions.router, people.router, public.router):
+for router in (
+    series.router,
+    meetings.router,
+    resolutions.router,
+    agenda.router,
+    actions.router,
+    people.router,
+    public.router,
+):
     app.include_router(router, prefix=settings.API_V1_STR)
 
+
+# ── Route Handlers ───────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["Health"])
 async def health_check():

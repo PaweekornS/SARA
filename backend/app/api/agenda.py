@@ -16,8 +16,12 @@ from app.services.agenda_builder import SECTION_TITLES, STATUS_LABEL_TH, assigne
 from app.services.docx_export import build_agenda_docx
 from app.services.resolutions import get_or_404, overdue_days
 
+# ── Global Variables & Constants ─────────────────────────────────────────────
+
 router = APIRouter(prefix="/agenda", tags=["Agenda"])
 
+
+# ── Functions & Route Handlers ───────────────────────────────────────────────
 
 async def _items(db: AsyncSession, draft_id: UUID) -> list[AgendaItem]:
     rows = await db.execute(
@@ -58,9 +62,8 @@ async def patch_items(agenda_id: UUID, payload: AgendaItemsPatch, db: AsyncSessi
 
     for existing in await _items(db, draft.id):
         await db.delete(existing)
-    await db.flush()
 
-    for order, item in enumerate(payload.items):
+    for i, item in enumerate(payload.items, start=1):
         db.add(
             AgendaItem(
                 agenda_draft_id=draft.id,
@@ -69,68 +72,42 @@ async def patch_items(agenda_id: UUID, payload: AgendaItemsPatch, db: AsyncSessi
                 title=item.title,
                 body=item.body,
                 resolution_id=item.resolution_id,
-                sort_order=order,
+                sort_order=i,
             )
         )
-
     await db.commit()
-    await db.refresh(draft)
     return await _out(db, draft)
 
 
 @router.get("/{agenda_id}/export")
-async def export_agenda(agenda_id: UUID, format: str = "docx", db: AsyncSession = Depends(get_db)):
-    """FR-M5-04 ส่งออกร่างวาระเป็น .docx ที่เปิดแก้ต่อใน Word ได้"""
-    if format != "docx":
-        raise HTTPException(status_code=400, detail="รองรับเฉพาะ format=docx")
-
+async def export_docx(agenda_id: UUID, db: AsyncSession = Depends(get_db)):
+    """FR-M5-04 ส่งออกเป็น .docx ตามรูปแบบราชการ"""
     draft = await get_or_404(db, AgendaDraft, agenda_id, "ร่างระเบียบวาระ")
     series = await get_or_404(db, MeetingSeries, draft.series_id, "ชุดการประชุม")
+
     items = await _items(db, draft.id)
+    by_section: dict[int, list[dict]] = {}
+    for it in items:
+        by_section.setdefault(it.section_no, []).append(
+            {
+                "item_no": it.item_no,
+                "title": it.title,
+                "body": it.body,
+            }
+        )
 
-    sections = []
-    for section_no in (1, 2, 3, 4, 5):
-        rows = [(i.title, i.body) for i in items if i.section_no == section_no]
-        sections.append((section_no, SECTION_TITLES[section_no], rows))
-
-    blob = build_agenda_docx(
+    content = build_agenda_docx(
         series_name=series.name,
         fiscal_year=series.fiscal_year,
         sequence_no=draft.target_sequence_no,
         meeting_date=draft.target_meeting_date,
-        sections=sections,
+        items_by_section=by_section,
         template_path=settings.AGENDA_TEMPLATE_PATH or None,
     )
 
-    filename = f"agenda-{draft.target_sequence_no}-{series.fiscal_year}.docx"
+    filename = f"agenda_{series.id}_{draft.target_sequence_no}.docx"
     return Response(
-        content=blob,
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
-
-
-@router.get("/{agenda_id}/summary")
-async def agenda_summary(agenda_id: UUID, db: AsyncSession = Depends(get_db)):
-    """ตารางสรุปมติค้างที่แนบท้ายวาระ — ใช้ทั้งในเอกสารและในอีเมลแจ้งประธาน"""
-    draft = await get_or_404(db, AgendaDraft, agenda_id, "ร่างระเบียบวาระ")
-    items = [i for i in await _items(db, draft.id) if i.section_no == 3 and i.resolution_id]
-
-    rows = []
-    for item in items:
-        resolution = await db.get(Resolution, item.resolution_id)
-        if resolution is None:
-            continue
-        #  ใช้ตัวเดียวกับที่สร้างเนื้อวาระ ตารางสรุปกับตัวเอกสารจะได้ไม่เรียงชื่อคนละแบบ
-        names = await assignee_names(db, resolution.id)
-        rows.append(
-            {
-                "ref_no": resolution.ref_no,
-                "text": resolution.text,
-                "assignees": ", ".join(names),
-                "due_date": resolution.due_date,
-                "status": STATUS_LABEL_TH.get(resolution.status, resolution.status),
-                "overdue": overdue_days(resolution),
-            }
-        )
-    return {"agenda_id": draft.id, "rows": rows}

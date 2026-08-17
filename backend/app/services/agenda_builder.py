@@ -29,6 +29,8 @@ from app.db.models import (
 from app.services.resolutions import overdue_days
 from app.services.thai_format import thai_date
 
+# ── Global Variables & Constants ─────────────────────────────────────────────
+
 STATUS_LABEL_TH = {
     ResolutionStatus.PROPOSED: "รอรับรอง",
     ResolutionStatus.CONFIRMED: "รับรองแล้ว",
@@ -50,12 +52,15 @@ SECTION_TITLES = {
 _LEADING_VERBS = ("ที่ประชุมมีมติให้", "มอบหมายให้", "อนุมัติให้", "อนุมัติ", "ให้")
 
 
+# ── Functions ────────────────────────────────────────────────────────────────
+
 def agenda_topic(text: str) -> str:
     """
-    หัวข้อวาระเขียนเป็น "เรื่อง ..." ตามรูปแบบราชการ
-    เก็บข้อความเต็มเสมอ ห้ามตัดด้วย ... เพราะจะติดไปในเอกสารที่ export
+    หัวข้อวาระตามรูปแบบราชการ "เรื่อง ..."
     """
     topic = text.strip()
+    if topic.startswith("เรื่อง "):
+        return topic
     for verb in _LEADING_VERBS:
         if topic.startswith(verb):
             topic = topic[len(verb) :].strip()
@@ -95,6 +100,7 @@ async def generate_agenda(db: AsyncSession, series: MeetingSeries, today: date |
 
     def push(section_no: int, item_no: int, title: str, body: str, resolution_id=None) -> None:
         nonlocal order
+        order += 1
         db.add(
             AgendaItem(
                 agenda_draft_id=draft.id,
@@ -106,68 +112,71 @@ async def generate_agenda(db: AsyncSession, series: MeetingSeries, today: date |
                 sort_order=order,
             )
         )
-        order += 1
 
+    # วาระ 1: ประธานแจ้ง
     push(1, 1, SECTION_TITLES[1], "")
 
+    # วาระ 2: รับรองรายงานครั้งก่อน
     if last_meeting:
-        push(
-            2,
-            1,
-            f"รับรองรายงานการประชุมครั้งที่ {last_seq}/{last_meeting.fiscal_year}",
-            f"เมื่อวันที่ {thai_date(last_meeting.meeting_date)} ฝ่ายเลขานุการได้จัดทำรายงานการประชุม"
-            "เสร็จเรียบร้อยแล้ว จึงเสนอที่ประชุมเพื่อพิจารณารับรอง",
-        )
+        date_str = thai_date(last_meeting.meeting_date)
+        body = f"รับรองรายงานการประชุมครั้งที่ {last_seq}/{series.fiscal_year} เมื่อวันที่ {date_str}"
     else:
-        push(2, 1, "รับรองรายงานการประชุม", "(ยังไม่มีการประชุมครั้งก่อนในชุดนี้)")
+        body = "การประชุมครั้งแรกของชุดนี้ — ยังไม่มีรายงานการประชุมครั้งก่อน"
+    push(2, 1, f"รับรองรายงานการประชุมครั้งที่ {last_seq or 1}", body)
 
-    #  วาระที่ ๓ — มติค้างทั้งหมดของ series เรียงตามความช้าที่สุดก่อน (FR-M5-01, 03)
-    open_resolutions = (
+    # วาระ 3: เรื่องสืบเนื่อง
+    open_res = (
         await db.execute(
-            select(Resolution).where(
+            select(Resolution)
+            .where(
                 Resolution.series_id == series.id,
                 Resolution.status.in_(ResolutionStatus.OPEN),
             )
+            .order_by(Resolution.created_at)
         )
     ).scalars().all()
-    open_resolutions.sort(key=lambda r: overdue_days(r, today), reverse=True)
 
-    meeting_by_id = {m.id: m for m in meetings}
+    item_no = 0
+    for res in open_res:
+        item_no += 1
+        assignees = await assignee_names(db, res.id)
+        overdue = overdue_days(res, today)
+        due_str = thai_date(res.due_date) if res.due_date else "ไม่ระบุ"
+        status_th = STATUS_LABEL_TH.get(res.status, res.status)
 
-    for i, r in enumerate(open_resolutions, start=1):
-        names = await assignee_names(db, r.id)
-        origin = meeting_by_id.get(r.origin_meeting_id)
-        od = overdue_days(r, today)
-        lines = [
-            f"มติเดิม: “{r.text}”",
-            f"ที่มา: การประชุมครั้งที่ "
-            f"{origin.sequence_no if origin else '-'}/{origin.fiscal_year if origin else series.fiscal_year} "
-            f"{r.origin_agenda_item or ''} ({r.ref_no})".strip(),
-            f"ผู้รับผิดชอบ: {', '.join(names) if names else '-'}",
-            f"กำหนดแล้วเสร็จ: {thai_date(r.due_date) if r.due_date else 'ไม่ระบุ'}",
-            f"สถานะปัจจุบัน: {STATUS_LABEL_TH.get(r.status, r.status)}"
-            + (f" · เกินกำหนดแล้ว {od} วัน" if od > 0 else ""),
+        body_lines = [
+            f"อ้างอิง: {res.ref_no}",
+            f"ข้อความมติ: {res.text}",
+            f"ผู้รับผิดชอบ: {assignees or 'ยังไม่ระบุ'}",
+            f"กำหนดเสร็จ: {due_str} (สถานะ: {status_th})",
         ]
-        if (r.postpone_count or 0) >= 3:
-            lines.append(f"⚑ มติข้อนี้ถูกเลื่อนกำหนดมาแล้ว {r.postpone_count} ครั้ง")
-        lines.append("จึงเสนอที่ประชุมเพื่อทราบและพิจารณาเร่งรัดการดำเนินการ")
+        if overdue > 0:
+            body_lines.append(f"⚠ เกินกำหนดมาแล้ว {overdue} วัน — ขอให้ผู้รับผิดชอบรายงานความคืบหน้าและปัญหาอุปสรรค")
+        if (res.postpone_count or 0) >= 3:
+            body_lines.append(f"⚠ มตินี้ถูกเลื่อนกำหนดมาแล้ว {res.postpone_count} ครั้ง ขอให้ที่ประชุมพิจารณาแนวทางแก้ไข")
 
-        push(3, i, agenda_topic(r.text), "\n".join(lines), r.id)
+        push(3, item_no, agenda_topic(res.text), "\n".join(body_lines), resolution_id=res.id)
 
-    push(4, 1, SECTION_TITLES[4], "(ฝ่ายเลขานุการเพิ่มเติมตามที่ได้รับแจ้ง)")
+    if item_no == 0:
+        push(3, 1, "ไม่มีเรื่องสืบเนื่อง", "ไม่มีมติค้างที่ต้องติดตามในการประชุมครั้งนี้")
+
+    # วาระ 4: เรื่องเสนอเพื่อพิจารณา
+    push(4, 1, SECTION_TITLES[4], "ให้ฝ่ายที่เกี่ยวข้องนำเสนอเรื่องตามลำดับ")
+
+    # วาระ 5: เรื่องอื่น ๆ
     push(5, 1, SECTION_TITLES[5], "")
 
-    await db.flush()
+    await db.commit()
+    await db.refresh(draft)
     return draft
 
 
-async def assignee_names(db: AsyncSession, resolution_id: UUID) -> list[str]:
-    rows = await db.execute(
-        select(Person)
-        .join(ResolutionAssignee, ResolutionAssignee.person_id == Person.id)
-        .where(ResolutionAssignee.resolution_id == resolution_id)
-    )
-    people = list(rows.scalars().all())
-    #  หน่วยงานขึ้นก่อนบุคคล อ่านแล้วรู้ทันทีว่าใครรับผิดชอบจริง
-    people.sort(key=lambda p: (not p.is_department, p.full_name))
-    return [p.full_name for p in people]
+async def assignee_names(db: AsyncSession, resolution_id: UUID) -> str:
+    rows = (
+        await db.execute(
+            select(Person.full_name)
+            .join(ResolutionAssignee, ResolutionAssignee.person_id == Person.id)
+            .where(ResolutionAssignee.resolution_id == resolution_id)
+        )
+    ).scalars().all()
+    return ", ".join(rows)

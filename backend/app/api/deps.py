@@ -20,14 +20,30 @@ from app.db.models import Organization
 from app.db.session import get_db
 
 
-async def current_actor(x_actor: str | None = Header(default=None)) -> str:
+async def current_actor(
+    x_actor: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="x-api-key"),
+    authorization: str | None = Header(default=None),
+) -> str:
     """
-    ชื่อผู้กระทำเป็นภาษาไทย แต่ HTTP header ส่งได้เฉพาะ latin-1
-    ฝั่ง client จึงต้อง encodeURIComponent มาก่อน ไม่งั้นชื่อจะเพี้ยนเป็นเครื่องหมายคำถาม
+    ตรวจสอบสิทธิ์ผ่าน API Key (หากมีการกำหนด API_KEY ในคอนฟิก)
+    และอ่านชื่อผู้กระทำจาก X-Actor header เพื่อสร้าง Audit Trail ที่น่าเชื่อถือ
     """
+    if settings.API_KEY:
+        auth_token = None
+        if authorization and authorization.lower().startswith("bearer "):
+            auth_token = authorization[7:].strip()
+        provided_key = x_api_key or auth_token
+        if provided_key != settings.API_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="API Key ไม่ถูกต้องหรือไม่ได้ระบุสิทธิ์ในการใช้งาน",
+            )
+
     if not x_actor:
         return settings.DEFAULT_ACTOR
     return (unquote(x_actor) or settings.DEFAULT_ACTOR).strip()
+
 
 
 async def current_org(db: AsyncSession = Depends(get_db)) -> Organization:

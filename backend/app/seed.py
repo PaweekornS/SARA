@@ -43,8 +43,7 @@ from app.db.session import AsyncSessionLocal, engine
 DONE_PIPELINE = [
     {"stage": "upload", "state": "ok", "detail": "รับไฟล์และตรวจความสมบูรณ์"},
     {"stage": "asr", "state": "ok", "detail": "ถอดเสียงด้วย AI4Thai ASR"},
-    {"stage": "diarize", "state": "ok", "detail": "แยกผู้พูด 5 คน"},
-    {"stage": "extract", "state": "ok", "detail": "สกัดมติและจับคู่กับมติเดิม"},
+    {"stage": "extract", "state": "ok", "detail": "สรุปเนื้อหาและสกัดมติ"},
     {"stage": "done", "state": "ok", "detail": "พร้อมให้ตรวจทาน"},
 ]
 
@@ -69,15 +68,27 @@ async def seed(session: AsyncSession) -> None:
         session.add(row)
         return row
 
-    chair = person("นายธนกฤต อารีวงศ์", "ผู้อำนวยการ (ประธานที่ประชุม)", "สำนักผู้อำนวยการ", "thanakrit.a@demo.go.th")
-    deputy = person("นายสุรชัย ทองอินทร์", "รองผู้อำนวยการ", "สำนักผู้อำนวยการ", "surachai.t@demo.go.th")
-    secretary = person(SECRETARY, "หัวหน้าฝ่ายบริหารงานทั่วไป (เลขานุการที่ประชุม)", "ฝ่ายบริหารงานทั่วไป", "preeyanuch.w@demo.go.th")
-    it = person("นายวีระพงษ์ ศรีสมบูรณ์", "หัวหน้าฝ่ายเทคโนโลยีสารสนเทศ", "ฝ่ายเทคโนโลยีสารสนเทศ", "weerapong.s@demo.go.th")
-    supply = person("นางกาญจนา พูลสวัสดิ์", "หัวหน้าฝ่ายพัสดุ", "ฝ่ายพัสดุ", "kanjana.p@demo.go.th")
-    finance = person("นางสาวศิริพร เจริญผล", "หัวหน้าฝ่ายการเงินและบัญชี", "ฝ่ายการเงินและบัญชี", "siriporn.j@demo.go.th")
-    academic = person("นายกิตติศักดิ์ แสนสุข", "หัวหน้าฝ่ายวิชาการ", "ฝ่ายวิชาการ", "kittisak.s@demo.go.th")
-    dept_supply = person("ฝ่ายพัสดุ", "หน่วยงาน", "ฝ่ายพัสดุ", "supply@demo.go.th", True)
-    dept_it = person("ฝ่ายเทคโนโลยีสารสนเทศ", "หน่วยงาน", "ฝ่ายเทคโนโลยีสารสนเทศ", "it@demo.go.th", True)
+    # ── หน่วยงาน / ฝ่าย (Department Entities) ───────────────────────────
+    dept_directorate = person("สำนักผู้อำนวยการ", "หน่วยงาน", "สำนักผู้อำนวยการ", "test01@gmail.com", True)
+    dept_admin = person("ฝ่ายบริหารงานทั่วไป", "หน่วยงาน", "ฝ่ายบริหารงานทั่วไป", "test01@gmail.com", True)
+    dept_it = person("ฝ่ายเทคโนโลยีสารสนเทศ", "หน่วยงาน", "ฝ่ายเทคโนโลยีสารสนเทศ", "test02@gmail.com", True)
+    dept_supply = person("ฝ่ายพัสดุ", "หน่วยงาน", "ฝ่ายพัสดุ", "test01@gmail.com", True)
+    dept_finance = person("ฝ่ายการเงินและบัญชี", "หน่วยงาน", "ฝ่ายการเงินและบัญชี", "test02@gmail.com", True)
+    dept_academic = person("ฝ่ายวิชาการ", "หน่วยงาน", "ฝ่ายวิชาการ", "test01@gmail.com", True)
+
+    # ── บุคลากรในแต่ละฝ่าย (Members per Department) ─────────────────────
+    chair = person("นายธนกฤต อารีวงศ์", "ผู้อำนวยการ (ประธานที่ประชุม)", "สำนักผู้อำนวยการ", "test01@gmail.com")
+    deputy = person("นายสุรชัย ทองอินทร์", "รองผู้อำนวยการ", "สำนักผู้อำนวยการ", "test02@gmail.com")
+    secretary = person(SECRETARY, "หัวหน้าฝ่ายบริหารงานทั่วไป (เลขานุการที่ประชุม)", "ฝ่ายบริหารงานทั่วไป", "test01@gmail.com")
+    admin_officer = person("นายณัฐวุฒิ สิทธิชัย", "เจ้าหน้าที่บริหารงานทั่วไปปฏิบัติการ", "ฝ่ายบริหารงานทั่วไป", "test02@gmail.com")
+    it = person("นายวีระพงษ์ ศรีสมบูรณ์", "หัวหน้าฝ่ายเทคโนโลยีสารสนเทศ", "ฝ่ายเทคโนโลยีสารสนเทศ", "test02@gmail.com")
+    it_officer = person("นายชานนท์ วงศ์สุวรรณ", "นักวิชาการคอมพิวเตอร์ชำนาญการ", "ฝ่ายเทคโนโลยีสารสนเทศ", "test01@gmail.com")
+    supply = person("นางกาญจนา พูลสวัสดิ์", "หัวหน้าฝ่ายพัสดุ", "ฝ่ายพัสดุ", "test01@gmail.com")
+    supply_officer = person("นายเอกชัย ภักดี", "เจ้าหน้าที่พัสดุชำนาญการ", "ฝ่ายพัสดุ", "test02@gmail.com")
+    finance = person("นางสาวศิริพร เจริญผล", "หัวหน้าฝ่ายการเงินและบัญชี", "ฝ่ายการเงินและบัญชี", "test02@gmail.com")
+    finance_officer = person("นางสาวกมลวรรณ สุขสม", "นักวิชาการเงินและบัญชีปฏิบัติการ", "ฝ่ายการเงินและบัญชี", "test01@gmail.com")
+    academic = person("นายกิตติศักดิ์ แสนสุข", "หัวหน้าฝ่ายวิชาการ", "ฝ่ายวิชาการ", "test01@gmail.com")
+    academic_officer = person("นางสาวนภัสสร รุ่งเรือง", "นักวิชาการแผนและนโยบายชำนาญการ", "ฝ่ายวิชาการ", "test02@gmail.com")
     await session.flush()
 
     for person_row, alias, source, confidence in [
