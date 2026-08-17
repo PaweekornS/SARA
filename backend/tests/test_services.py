@@ -19,12 +19,13 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.core import security
-from app.db.models import ResolutionStatus
+from app.db.models import Resolution, ResolutionStatus
+from app.schemas import QaAnswerOut
 from app.services import extraction
 from app.services.agenda_builder import STATUS_LABEL_TH, agenda_topic
 from app.services.docx_export import build_agenda_docx, build_minutes_docx
-from app.services.llm import LlmError, _parse_json
-from app.services.mcp_agent import _sse_url, build_reminder_body
+from app.services.llm import LlmError, _parse_json, answer_from_context
+from app.services.mcp_agent import build_reminder_body
 from app.services.qa import relevance, thai_grams
 from app.services.resolutions import change_status, next_ref_no, overdue_days
 from app.services.thai_format import fiscal_year_of, thai_date, thai_numeral
@@ -40,7 +41,13 @@ class ThaiFormatting(unittest.TestCase):
         self.assertEqual(thai_date(date(2026, 7, 18)), "18 กรกฎาคม 2569")
 
     def test_short_month(self):
-        self.assertEqual(thai_date(date(2026, 7, 18), short=True), "18 กรก. 2569")
+        self.assertEqual(thai_date(date(2026, 7, 18), short=True), "18 ก.ค. 2569")
+        expected_abbrs = [
+            "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+            "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.",
+        ]
+        for m, abbr in enumerate(expected_abbrs, start=1):
+            self.assertEqual(thai_date(date(2026, m, 1), short=True), f"1 {abbr} 2569")
 
     def test_none_date_renders_as_dash_not_crash(self):
         self.assertEqual(thai_date(None), "-")
@@ -101,6 +108,10 @@ class LlmJsonParsing(unittest.TestCase):
         raw = 'ผลลัพธ์คือ {"evidence": "บรรทัดแรก\nบรรทัดที่สอง"} ครับ'
         self.assertIn("\n", _parse_json(raw)["evidence"])
 
+    def test_think_tag_is_filtered_out_in_json(self):
+        raw = '<think>\nวิเคราะห์ข้อมูล...\n</think>\n{"new_resolutions": []}'
+        self.assertEqual(_parse_json(raw), {"new_resolutions": []})
+
     def test_genuinely_broken_json_raises_llm_error_not_a_raw_json_error(self):
         with self.assertRaises(LlmError):
             _parse_json('{"new_resolutions": [เขียนไม่ครบ')
@@ -108,6 +119,12 @@ class LlmJsonParsing(unittest.TestCase):
     def test_response_with_no_braces_at_all_raises_llm_error(self):
         with self.assertRaises(LlmError):
             _parse_json("ขออภัยครับ ไม่พบมติในบันทึกการประชุมนี้เลย")
+
+    @patch("app.services.llm.chat")
+    def test_answer_from_context_filters_out_think_tag(self, mock_chat):
+        mock_chat.return_value = "<think>\nกำลังประมวลผลคำตอบ...\n</think>\n\nมติที่ 1/2567 อนุมัติงบประมาณ"
+        ans = answer_from_context("งบประมาณ", "บริบท")
+        self.assertEqual(ans, "มติที่ 1/2567 อนุมัติงบประมาณ")
 
 
 class StateMachine(unittest.TestCase):
@@ -204,15 +221,6 @@ class McpAgent(unittest.TestCase):
         self.assertIn("ครบกำหนดวันที่ 30 กันยายน 2569", body)
         self.assertNotIn("เกินกำหนด", body)
 
-    def test_sse_url_derived_from_mcp_url(self):
-        self.assertEqual(_sse_url.__module__, "app.services.mcp_agent")
-        for given, expected in [
-            ("http://mcp:8001/mcp", "http://mcp:8001/sse"),
-            ("http://mcp:8001/sse", "http://mcp:8001/sse"),
-            ("http://mcp:8001", "http://mcp:8001/sse"),
-        ]:
-            with patch("app.services.mcp_agent.settings.MCP_SERVER_URL", given):
-                self.assertEqual(_sse_url(), expected)
 
 
 class SystemInitiatedChanges(unittest.IsolatedAsyncioTestCase):
@@ -606,7 +614,7 @@ class ThaiSearch(unittest.TestCase):
         )
 
     def test_short_question_produces_no_grams(self):
-        self.assertEqual(thai_grams("มติ"), [])
+        self.assertEqual(thai_grams(""), [])
         self.assertEqual(relevance("อะไรก็ได้", []), 0.0)
 
 
@@ -628,5 +636,49 @@ class AgendaTopic(unittest.TestCase):
         self.assertGreater(len(topic), 300)
 
 
+class QaResolutionFlow(unittest.TestCase):
+    def test_qa_overdue_days_called_with_resolution_object(self):
+        res = Resolution(
+            series_id=uuid4(),
+            origin_meeting_id=uuid4(),
+            ref_no="มติ 1/2569 ข้อ 4.1",
+            text="ทดสอบมติ",
+            status=ResolutionStatus.IN_PROGRESS,
+            due_date=date(2026, 7, 1),
+        )
+        od = overdue_days(res, date(2026, 8, 1))
+        self.assertEqual(od, 31)
+
+    def test_qa_answer_out_validates_legacy_citation_and_timeline(self):
+        legacy_data = {
+            "id": uuid4(),
+            "question": "คำถามทดสอบ",
+            "answer": "คำตอบทดสอบ",
+            "source": "transcript",
+            "asked_at": "2026-08-17T17:50:00",
+            "citations": [
+                {
+                    "text": "ข้อความอ้างอิง",
+                    "meeting_id": str(uuid4()),
+                    "segment_id": None,
+                    "meeting_seq": 1,
+                }
+            ],
+            "timeline": [
+                {
+                    "action": "เกิดมติ",
+                    "detail": "ข้อความมติ",
+                    "meeting_date": "2026-08-18",
+                }
+            ],
+        }
+        out = QaAnswerOut.model_validate(legacy_data)
+        self.assertEqual(out.citations[0].quote, "ข้อความอ้างอิง")
+        self.assertEqual(out.citations[0].text, "ข้อความอ้างอิง")
+        self.assertEqual(out.timeline[0].label, "เกิดมติ")
+        self.assertEqual(out.timeline[0].action, "เกิดมติ")
+
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -201,7 +201,7 @@ async def build_fixture(sessionmaker) -> Fixture:
 
         done_pipeline = [
             {"stage": stage, "state": "ok", "detail": ""}
-            for stage in ("upload", "asr", "diarize", "extract", "done")
+            for stage in ("upload", "asr", "extract", "done")
         ]
         f.meeting1 = m.Meeting(
             series_id=f.series.id, sequence_no=1, fiscal_year=2569, meeting_date=date(2026, 5, 20),

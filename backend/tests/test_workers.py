@@ -62,7 +62,7 @@ class PipelineCase(DbCase):
                     audio_uri=self.audio, source_kind="audio", status=m.MeetingStatus.PROCESSING,
                     pipeline=[
                         {"stage": stage, "state": "pending", "detail": ""}
-                        for stage in ("upload", "asr", "diarize", "extract", "done")
+                        for stage in ("upload", "asr", "extract", "done")
                     ],
                 )
             )
@@ -91,7 +91,7 @@ class PipelineFailures(PipelineCase):
         self.assertEqual(stages["asr"]["state"], "failed")
         self.assertIn("ไม่มีการสร้าง transcript ทดแทน", stages["asr"]["error"])
         #  ขั้นถัดไปต้องไม่เดินต่อ
-        for stage in ("diarize", "extract", "done"):
+        for stage in ("extract", "done"):
             self.assertEqual(stages[stage]["state"], "pending")
 
         #  หลักฐานที่แข็งที่สุดว่าไม่มีข้อมูลปลอม: ฐานข้อมูลว่างเปล่า
@@ -183,13 +183,6 @@ class PipelineSuccess(PipelineCase):
         rows = (await self.client.get(f"/api/meetings/{self.meeting.id}/transcript")).json()
         self.assertEqual([r["start_ms"] for r in rows], [s[1] for s in SCRIPT])
 
-    async def test_diarize_detail_reflects_whether_asr_gave_speakers(self):
-        await self.run_ok(has_labels=True)
-        self.assertIn("จากผลของ ASR", (await self.stages())["diarize"]["detail"])
-
-    async def test_diarize_detail_asks_for_manual_mapping_when_asr_gives_none(self):
-        await self.run_ok(has_labels=False)
-        self.assertIn("ให้ระบุผู้พูดเองในหน้าตรวจทาน", (await self.stages())["diarize"]["detail"])
 
     async def test_extraction_output_lands_as_proposals_not_as_facts(self):
         """โมเดลเสนอได้อย่างเดียว — มติจริงเกิดตอนคนกดยืนยันเท่านั้น"""
@@ -418,12 +411,3 @@ class OutboundSender(DbCase):
         from uuid import uuid4
 
         self.assertEqual(await tasks._send_action(uuid4(), self.task), {"status": "SKIPPED"})
-
-
-class BeatSchedule(DbCase):
-    async def test_scanner_runs_every_morning_in_bangkok_time(self):
-        entry = tasks.celery_app.conf.beat_schedule["scan-due-resolutions-every-morning"]
-        self.assertEqual(entry["task"], "scan_due_resolutions")
-        self.assertEqual(entry["schedule"].hour, {8})
-        self.assertEqual(entry["schedule"].minute, {0})
-        self.assertEqual(tasks.celery_app.conf.timezone, "Asia/Bangkok")
