@@ -15,12 +15,15 @@ from openai import OpenAI
 
 from app.core.config import settings
 
+# ── Global Variables & Constants ─────────────────────────────────────────────
+
 logger = logging.getLogger(__name__)
 
 client = OpenAI(
     base_url=settings.PATHUMMA_BASE_URL,
     api_key=settings.APP_AI4THAI_API_KEY,
     timeout=settings.LLM_TIMEOUT_SECONDS,
+    max_retries=3,
 )
 
 # AI4Thai gateway ต้องการ apikey header เพิ่มจาก Authorization ปกติ
@@ -30,15 +33,25 @@ _EXTRA_HEADERS = {
 }
 
 
+# ── Classes & Exceptions ─────────────────────────────────────────────────────
+
 class LlmError(RuntimeError):
     """เรียกโมเดลไม่สำเร็จ หรือได้คำตอบที่ใช้ต่อไม่ได้"""
 
 
-def chat(messages: list[dict], temperature: float = 0.2, json_mode: bool = False) -> str:
+# ── Functions ────────────────────────────────────────────────────────────────
+
+def chat(
+    messages: list[dict],
+    temperature: float = 0.2,
+    json_mode: bool = False,
+    max_tokens: int = 2048,
+) -> str:
     kwargs = {
         "model": settings.PATHUMMA_MODEL_NAME,
         "messages": messages,
         "temperature": temperature,
+        "max_tokens": max_tokens,
         "extra_headers": _EXTRA_HEADERS,
     }
     if json_mode:
@@ -50,8 +63,16 @@ def chat(messages: list[dict], temperature: float = 0.2, json_mode: bool = False
         raise LlmError(f"เรียก {settings.PATHUMMA_MODEL_NAME} ไม่สำเร็จ: {err}") from err
 
     content = (response.choices[0].message.content or "").strip()
+    if "</think>" in content:
+        content = content.split("</think>")[-1].strip()
+
     if not content:
-        raise LlmError("โมเดลตอบกลับมาเป็นค่าว่าง")
+        # Fallback to full raw text if think filter stripped everything
+        raw_msg = (response.choices[0].message.content or "").strip()
+        if raw_msg:
+            content = raw_msg
+        else:
+            raise LlmError("โมเดลตอบกลับมาเป็นค่าว่าง")
     return content
 
 
@@ -63,33 +84,47 @@ def chat_json(system: str, user: str, temperature: float = 0.1) -> dict:
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     try:
         raw = chat(messages, temperature=temperature, json_mode=True)
-    except LlmError:
-        raw = chat(messages, temperature=temperature, json_mode=False)
+        return _parse_json(raw)
+    except Exception:
+        pass
 
+    raw = chat(messages, temperature=temperature, json_mode=False)
     return _parse_json(raw)
 
 
 def _parse_json(raw: str) -> dict:
     raw = raw.strip()
+    if "</think>" in raw:
+        after_think = raw.split("</think>")[-1].strip()
+        if after_think:
+            raw = after_think
+
     fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", raw, re.DOTALL)
     if fenced:
         raw = fenced.group(1).strip()
 
-    #  strict=False: โมเดลชอบยกคำพูดมาทั้งท่อนแล้วใส่ตัวขึ้นบรรทัดใหม่จริง ๆ ไว้ในสตริง
-    #  แทนที่จะ escape เป็น \n ให้ถูกต้อง — JSON เข้มงวดจะปัดตกอักขระควบคุมพวกนี้ทันที
-    #  แม้เนื้อหาที่เหลือจะถูกต้องทุกตัวอักษรก็ตาม
     try:
         return json.loads(raw, strict=False)
     except json.JSONDecodeError:
         pass
 
-    #  หาก้อน {...} ที่ใหญ่ที่สุดในข้อความ
+    # หาก้อน {...} ที่ใหญ่ที่สุดในข้อความ
     start, end = raw.find("{"), raw.rfind("}")
     if start != -1 and end > start:
         try:
             return json.loads(raw[start : end + 1], strict=False)
         except json.JSONDecodeError as err:
             raise LlmError(f"โมเดลตอบกลับมาไม่ใช่ JSON ที่อ่านได้: {err}") from err
+
+    # หาก้อน [...]
+    start_arr, end_arr = raw.find("["), raw.rfind("]")
+    if start_arr != -1 and end_arr > start_arr:
+        try:
+            arr = json.loads(raw[start_arr : end_arr + 1], strict=False)
+            return {"new_resolutions": arr}
+        except json.JSONDecodeError as err:
+            raise LlmError(f"โมเดลตอบกลับมาไม่ใช่ JSON ที่อ่านได้: {err}") from err
+
     raise LlmError("โมเดลตอบกลับมาโดยไม่มี JSON")
 
 
@@ -104,7 +139,12 @@ def answer_from_context(question: str, context: str) -> str:
         "ตอบเป็นภาษาไทย กระชับ ไม่เกิน 5 ประโยค\n\n"
         f"--- ข้อมูลการประชุม ---\n{context}\n-----------------------"
     )
-    return chat(
+    raw = chat(
         [{"role": "system", "content": system}, {"role": "user", "content": question}],
         temperature=0.2,
     )
+    if "</think>" in raw:
+        after = raw.split("</think>")[-1].strip()
+        if after:
+            raw = after
+    return raw

@@ -160,6 +160,7 @@ class Meeting(Base):
     fiscal_year = Column(Integer, nullable=False)
     meeting_date = Column(Date, nullable=False)
     title = Column(String, default="")
+    summary = Column(Text, default="")
     audio_uri = Column(String, nullable=True)
     source_kind = Column(String, default="audio")  # audio | transcript
     status = Column(String, default=MeetingStatus.PROCESSING, index=True)

@@ -20,6 +20,8 @@ from openai import OpenAI
 
 from app.core.config import settings
 
+# ── Global Variables & Constants ─────────────────────────────────────────────
+
 logger = logging.getLogger(__name__)
 
 client = OpenAI(
@@ -27,10 +29,13 @@ client = OpenAI(
     api_key=settings.APP_AI4THAI_API_KEY,
 )
 
-# เผื่อ margin จากลิมิต 25 MB ของ API
-MAX_FILE_SIZE = 24 * 1024 * 1024
+# ลิมิตขนาดไฟล์และความยาว chunk ที่เหมาะสมที่สุดสำหรับ ASR (10 นาที หรือ 20 MB)
+MAX_FILE_SIZE = 20 * 1024 * 1024
 CHUNK_SECONDS = 600
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?。])\s+|\n+")
 
+
+# ── Classes & Dataclasses ────────────────────────────────────────────────────
 
 class AsrError(RuntimeError):
     """ถอดเสียงไม่สำเร็จ — pipeline ต้องหยุดที่ขั้นนี้"""
@@ -48,12 +53,41 @@ class Segment:
 @dataclass
 class Transcript:
     segments: list[Segment] = field(default_factory=list)
-    #  ASR คืน speaker label มาเองหรือไม่ — ใช้ตัดสินว่าต้องให้คนระบุผู้พูดเองไหม
+    # ASR คืน speaker label มาเองหรือไม่ — ใช้ตัดสินว่าต้องให้คนระบุผู้พูดเองไหม
     has_speaker_labels: bool = False
 
     @property
     def text(self) -> str:
         return "\n".join(s.text for s in self.segments)
+
+
+# ── Functions ────────────────────────────────────────────────────────────────
+
+def _get_audio_duration(file_path: str) -> float:
+    """หาความยาวของไฟล์เสียง (วินาที) ด้วย ffprobe หรือ ffmpeg"""
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        file_path,
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return float(res.stdout.strip())
+    except Exception:
+        pass
+
+    try:
+        cmd = ["ffmpeg", "-i", file_path]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", res.stderr)
+        if match:
+            hours, minutes, seconds = match.groups()
+            return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+    except Exception:
+        pass
+    return 0.0
 
 
 def transcribe_audio(file_path: str) -> Transcript:
@@ -65,16 +99,27 @@ def transcribe_audio(file_path: str) -> Transcript:
     if size == 0:
         raise AsrError("ไฟล์เสียงว่างเปล่า (0 ไบต์)")
 
-    logger.info("ASR: %s (%.2f MB)", file_path, size / 1024 / 1024)
+    duration = _get_audio_duration(file_path)
+    logger.info("ASR: %s (%.2f MB, %.1f นาที)", file_path, size / 1024 / 1024, duration / 60 if duration else 0)
 
-    if size <= MAX_FILE_SIZE:
-        return _transcribe_one(file_path, offset_ms=0)
+    # หากไฟล์ยาวเกิน 10 นาที หรือขนาดเกิน 20MB ให้แบ่งเป็นช่วงย่อยเสมอเพื่อป้องกัน ASR คืนค่าว่าง
+    should_split = (duration > CHUNK_SECONDS) or (size > MAX_FILE_SIZE)
 
-    chunks = _split_audio(file_path)
+    if not should_split:
+        try:
+            result = _transcribe_one(file_path, offset_ms=0)
+            if result.segments:
+                return result
+            logger.info("ถอดเสียงไฟล์เดี่ยวได้ผลลัพธ์ว่างเปล่า — ลองแบ่งไฟล์เป็นช่วงย่อย (chunking)")
+        except Exception as err:
+            logger.info("ถอดเสียงไฟล์เดี่ยวไม่ผ่าน (%s) — ลองแบ่งไฟล์เป็นช่วงย่อย (chunking)", err)
+
+    chunks = _split_audio(file_path, chunk_seconds=CHUNK_SECONDS)
     if not chunks:
-        raise AsrError(
-            "ไฟล์ใหญ่เกิน 24 MB และแบ่งไฟล์ด้วย ffmpeg ไม่สำเร็จ จึงถอดเสียงต่อไม่ได้"
-        )
+        # หากแบ่งไม่ได้ ให้ลอง transcribe ไฟล์ตรง
+        if not should_split:
+            raise AsrError("AI4Thai ASR ตอบกลับมาโดยไม่มีข้อความ")
+        return _transcribe_one(file_path, offset_ms=0)
 
     merged = Transcript()
     offset = 0
@@ -84,7 +129,14 @@ def transcribe_audio(file_path: str) -> Transcript:
             part = _transcribe_one(chunk, offset_ms=offset)
             merged.segments.extend(part.segments)
             merged.has_speaker_labels = merged.has_speaker_labels or part.has_speaker_labels
-            offset = part.segments[-1].end_ms if part.segments else offset + CHUNK_SECONDS * 1000
+
+            chunk_duration = _get_audio_duration(chunk)
+            if part.segments and part.segments[-1].end_ms > offset:
+                offset = part.segments[-1].end_ms
+            elif chunk_duration > 0:
+                offset += int(chunk_duration * 1000)
+            else:
+                offset += CHUNK_SECONDS * 1000
     finally:
         for chunk in chunks:
             try:
@@ -93,34 +145,56 @@ def transcribe_audio(file_path: str) -> Transcript:
                 logger.warning("ลบไฟล์ชั่วคราวไม่สำเร็จ %s: %s", chunk, err)
 
     if not merged.segments:
-        raise AsrError("ถอดเสียงสำเร็จแต่ไม่ได้ข้อความกลับมา ตรวจสอบว่าไฟล์มีเสียงพูดจริง")
+        raise AsrError("AI4Thai ASR ตอบกลับมาโดยไม่มีข้อความ — ตรวจสอบว่าไฟล์มีเสียงพูดจริง")
     return merged
 
 
-def _transcribe_one(file_path: str, offset_ms: int) -> Transcript:
-    """
-    เรียก ASR ครั้งเดียว — ขอ verbose_json ก่อนเพื่อให้ได้ timestamp ระดับ segment
-    ถ้า endpoint ไม่รองรับค่อยถอยไป json ธรรมดาแล้วตัดประโยคเอง
-    """
+def _normalize_audio(file_path: str) -> str:
+    """แปลงไฟล์เสียงให้อยู่ในฟอร์แมตมาตรฐาน 16kHz Mono MP3 ที่ ASR ทุกตัวอ่านได้ 100%"""
+    base, _ = os.path.splitext(file_path)
+    output_path = f"{base}_norm.mp3"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", file_path,
+        "-vn",
+        "-ar", "16000",
+        "-ac", "1",
+        "-c:a", "libmp3lame",
+        "-b:a", "64k",
+        output_path,
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+    except Exception as err:
+        logger.warning("ffmpeg normalize audio failed: %s", err)
+    return file_path
+
+
+def _call_asr_api(file_path: str, offset_ms: int) -> Transcript:
+    filename = os.path.basename(file_path)
+    # 1. ลอง verbose_json ก่อนเพื่อให้ได้ timestamp ระดับ segment
     try:
         with open(file_path, "rb") as fh:
             raw = client.audio.transcriptions.create(
                 model=settings.ASR_MODEL,
-                file=fh,
+                file=(filename, fh),
                 language="th",
                 response_format="verbose_json",
             )
         return _from_verbose(raw, offset_ms)
     except AsrError:
         raise
-    except Exception as verbose_err:  # noqa: BLE001 — ต้องรู้ทุกสาเหตุที่ verbose ไม่ผ่าน
+    except Exception as verbose_err:  # noqa: BLE001
         logger.info("verbose_json ใช้ไม่ได้ (%s) — ลองแบบ json ธรรมดา", verbose_err)
 
+    # 2. ลอง json ธรรมดา
     try:
         with open(file_path, "rb") as fh:
             raw = client.audio.transcriptions.create(
                 model=settings.ASR_MODEL,
-                file=fh,
+                file=(filename, fh),
                 language="th",
                 response_format="json",
             )
@@ -129,8 +203,36 @@ def _transcribe_one(file_path: str, offset_ms: int) -> Transcript:
 
     text = (getattr(raw, "text", "") or "").strip()
     if not text:
-        raise AsrError("AI4Thai ASR ตอบกลับมาโดยไม่มีข้อความ")
+        return Transcript(segments=[], has_speaker_labels=False)
     return Transcript(segments=_split_sentences(text, offset_ms), has_speaker_labels=False)
+
+
+def _transcribe_one(file_path: str, offset_ms: int) -> Transcript:
+    """
+    เรียก ASR ครั้งเดียว — ถ้าถอดรหัสเสียงไม่ได้ (422 Failed to decode audio) หรือได้ผลลัพธ์ว่าง
+    จะแปลงไฟล์เป็นมาตรฐาน 16kHz mono MP3 ด้วย ffmpeg แล้วลองใหม่อัตโนมัติ
+    """
+    try:
+        result = _call_asr_api(file_path, offset_ms)
+        if result.segments:
+            return result
+    except Exception as err:
+        err_msg = str(err).lower()
+        if "decode" not in err_msg and "422" not in err_msg and "unprocessable" not in err_msg:
+            raise
+
+    logger.info("ASR ลองแปลงไฟล์ด้วย ffmpeg 16kHz mono แล้วลองใหม่: %s", file_path)
+    norm_path = _normalize_audio(file_path)
+    if norm_path != file_path and os.path.exists(norm_path):
+        try:
+            return _call_asr_api(norm_path, offset_ms)
+        finally:
+            try:
+                os.remove(norm_path)
+            except OSError:
+                pass
+
+    return Transcript(segments=[], has_speaker_labels=False)
 
 
 def _from_verbose(raw, offset_ms: int) -> Transcript:
@@ -139,7 +241,7 @@ def _from_verbose(raw, offset_ms: int) -> Transcript:
     if not raw_segments:
         text = (getattr(raw, "text", "") or "").strip()
         if not text:
-            raise AsrError("AI4Thai ASR ตอบกลับมาโดยไม่มีข้อความ")
+            return Transcript(segments=[], has_speaker_labels=False)
         return Transcript(segments=_split_sentences(text, offset_ms), has_speaker_labels=False)
 
     segments: list[Segment] = []
@@ -162,8 +264,6 @@ def _from_verbose(raw, offset_ms: int) -> Transcript:
             )
         )
 
-    if not segments:
-        raise AsrError("AI4Thai ASR คืน segment ที่ไม่มีข้อความเลย")
     return Transcript(segments=segments, has_speaker_labels=has_speakers)
 
 
@@ -178,9 +278,6 @@ def _confidence_of(data: dict) -> float:
         return 1.0
 
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?。])\s+|\n+")
-
-
 def _split_sentences(text: str, offset_ms: int) -> list[Segment]:
     """
     ตัดข้อความจริงเป็นท่อน ๆ เมื่อ ASR ไม่ให้ timestamp มา
@@ -191,7 +288,7 @@ def _split_sentences(text: str, offset_ms: int) -> list[Segment]:
     if not parts:
         parts = [text]
 
-    #  ประมาณอัตราการพูดภาษาไทยที่ ~12 ตัวอักษร/วินาที
+    # ประมาณอัตราการพูดภาษาไทยที่ ~12 ตัวอักษร/วินาที
     chars_per_ms = 12 / 1000
     segments: list[Segment] = []
     cursor = offset_ms
@@ -202,20 +299,24 @@ def _split_sentences(text: str, offset_ms: int) -> list[Segment]:
     return segments
 
 
-def _split_audio(file_path: str) -> list[str]:
-    base, ext = os.path.splitext(file_path)
-    pattern = f"{base}_chunk_%03d{ext}"
+def _split_audio(file_path: str, chunk_seconds: int = CHUNK_SECONDS) -> list[str]:
+    base, _ = os.path.splitext(file_path)
+    pattern = f"{base}_chunk_%03d.mp3"
     cmd = [
         "ffmpeg", "-y",
         "-i", file_path,
         "-f", "segment",
-        "-segment_time", str(CHUNK_SECONDS),
-        "-c", "copy",
+        "-segment_time", str(chunk_seconds),
+        "-vn",
+        "-ar", "16000",
+        "-ac", "1",
+        "-c:a", "libmp3lame",
+        "-b:a", "64k",
         pattern,
     ]
     try:
         subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return sorted(glob.glob(f"{base}_chunk_*{ext}"))
+        return sorted(glob.glob(f"{base}_chunk_*.mp3"))
     except subprocess.CalledProcessError as err:
         logger.error("ffmpeg แบ่งไฟล์ไม่สำเร็จ: %s", err.stderr)
         return []

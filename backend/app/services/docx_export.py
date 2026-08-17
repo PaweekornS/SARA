@@ -3,10 +3,6 @@
 
 ฟอนต์ TH Sarabun New ขนาด 16 pt · กระดาษ A4 · ขอบตามหนังสือราชการ
 ตั้งค่า w:cs (complex script) ด้วย ไม่งั้น Word จะใช้ฟอนต์อื่นเรนเดอร์ตัวอักษรไทย
-
-หมายเหตุจาก §M5: ของจริงควรใช้ไฟล์ .docx ต้นแบบขององค์กรแล้วแทนที่ placeholder
-ฟังก์ชัน build_* ทั้งหมดจึงรับ template_path ไว้ ถ้าองค์กรวางไฟล์ต้นแบบไว้ ระบบจะเปิดจากไฟล์นั้น
-แล้วเติมเนื้อหาต่อท้าย แทนการสร้างเอกสารเปล่าเอง
 """
 
 from __future__ import annotations
@@ -23,11 +19,15 @@ from docx.shared import Cm, Pt
 
 from app.services.thai_format import thai_date, thai_numeral
 
+# ── Global Variables & Constants ─────────────────────────────────────────────
+
 FONT_NAME = "TH Sarabun New"
 BODY_SIZE = Pt(16)
 TITLE_SIZE = Pt(20)
 HEADING_SIZE = Pt(18)
 
+
+# ── Helper Functions ─────────────────────────────────────────────────────────
 
 def _new_document(template_path: str | None) -> Document:
     if template_path and os.path.exists(template_path):
@@ -100,152 +100,172 @@ def build_agenda_docx(
     fiscal_year: int,
     sequence_no: int,
     meeting_date: date | None,
-    sections: list[tuple[int, str, list[tuple[str, str]]]],
+    sections: list[tuple[int, str, list[tuple[str, str]]]] | None = None,
+    items_by_section: dict[int, list[dict]] | None = None,
     template_path: str | None = None,
 ) -> bytes:
-    """sections = [(section_no, section_title, [(item_title, item_body), ...])]"""
     doc = _new_document(template_path)
 
-    _para(doc, f"ระเบียบวาระการประชุม{series_name}", size=TITLE_SIZE, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _para(doc, "ระเบียบวาระการประชุม", size=TITLE_SIZE, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _para(doc, series_name, size=HEADING_SIZE, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
     _para(
         doc,
         f"ครั้งที่ {thai_numeral(sequence_no)}/{thai_numeral(fiscal_year)}",
         size=HEADING_SIZE,
+        bold=True,
         align=WD_ALIGN_PARAGRAPH.CENTER,
     )
     if meeting_date:
         _para(
             doc,
-            f"วันที่ {thai_numeral(thai_date(meeting_date))}",
-            size=HEADING_SIZE,
+            f"วัน{thai_date(meeting_date)}",
+            size=BODY_SIZE,
             align=WD_ALIGN_PARAGRAPH.CENTER,
         )
-    doc.add_paragraph()
 
-    for section_no, section_title, items in sections:
-        _para(
-            doc,
-            f"ระเบียบวาระที่ {thai_numeral(section_no)} {section_title}",
-            size=HEADING_SIZE,
-            bold=True,
-        )
-        if not items:
-            _para(doc, "(ไม่มี)", indent_cm=1.27)
-            continue
-        for idx, (title, body) in enumerate(items, start=1):
-            _para(
-                doc,
-                f"{thai_numeral(section_no)}.{thai_numeral(idx)} {title}",
-                bold=True,
-                indent_cm=1.27,
-            )
-            if body:
-                _para(doc, body, indent_cm=1.27)
+    _para(doc)  # บรรทัดว่าง
 
-    _signature_block(doc)
+    section_names = {
+        1: "ระเบียบวาระที่ ๑  เรื่องที่ประธานแจ้งให้ที่ประชุมทราบ",
+        2: "ระเบียบวาระที่ ๒  เรื่องรับรองรายงานการประชุม",
+        3: "ระเบียบวาระที่ ๓  เรื่องสืบเนื่องจากการประชุมครั้งก่อน",
+        4: "ระเบียบวาระที่ ๔  เรื่องเสนอเพื่อพิจารณา",
+        5: "ระเบียบวาระที่ ๕  เรื่องอื่น ๆ",
+    }
+
+    if sections is not None:
+        for sec_num, sec_title, items in sections:
+            header = f"ระเบียบวาระที่ {thai_numeral(sec_num)}  {sec_title}"
+            _para(doc, header, bold=True)
+            if not items:
+                _para(doc, "- ไม่มี -", indent_cm=1.5)
+                continue
+            for item in items:
+                if isinstance(item, tuple):
+                    title, body = item
+                    _para(doc, title, bold=bool(body), indent_cm=1.0)
+                    if body:
+                        _para(doc, body, indent_cm=1.5)
+                elif isinstance(item, dict):
+                    title = item.get("title", "")
+                    body = item.get("body", "")
+                    _para(doc, title, bold=bool(body), indent_cm=1.0)
+                    if body:
+                        _para(doc, body, indent_cm=1.5)
+    else:
+        by_sec = items_by_section or {}
+        for sec_no in range(1, 6):
+            _para(doc, section_names[sec_no], bold=True)
+            items = by_sec.get(sec_no, [])
+            if not items:
+                _para(doc, "- ไม่มี -", indent_cm=1.5)
+                continue
+            for it in items:
+                title = it.get("title", "").strip()
+                body = it.get("body", "").strip()
+                item_no = it.get("item_no")
+                prefix = f"{sec_no}.{item_no} " if item_no else ""
+                if title:
+                    _para(doc, f"{prefix}{title}", bold=bool(body), indent_cm=1.0)
+                if body:
+                    _para(doc, body, indent_cm=1.5)
+
     return _to_bytes(doc)
 
 
-def build_agenda_attachment(doc: Document, rows: list[dict]) -> None:
-    """ตารางสรุปสถานะมติค้าง แนบท้ายวาระ ให้ประธานอ่านหน้าเดียวจบ"""
-    if not rows:
-        return
-    _para(doc, "เอกสารแนบ ๑ สรุปสถานะมติค้างดำเนินการ", size=HEADING_SIZE, bold=True)
-    table = doc.add_table(rows=1, cols=6)
-    table.style = "Table Grid"
-    headers = ["ลำดับ", "มติ", "ที่มา", "ผู้รับผิดชอบ", "กำหนด", "สถานะ"]
-    for cell, header in zip(table.rows[0].cells, headers):
-        cell.text = header
-    for i, row in enumerate(rows, start=1):
-        cells = table.add_row().cells
-        cells[0].text = thai_numeral(i)
-        cells[1].text = row["text"]
-        cells[2].text = row["ref_no"]
-        cells[3].text = row["assignees"]
-        cells[4].text = thai_numeral(thai_date(row["due_date"])) if row["due_date"] else "-"
-        cells[5].text = row["status"] + (f"\nเกิน {thai_numeral(row['overdue'])} วัน" if row["overdue"] else "")
-
-
-# ── รายงานการประชุมฉบับเต็ม ─────────────────────────────────────────────
+# ── รายงานการประชุม ───────────────────────────────────────────────────
 
 def build_minutes_docx(
     series_name: str,
-    fiscal_year: int,
     sequence_no: int,
-    meeting_date: date,
-    attendees: list[str],
-    resolutions: list[dict],
-    segments: list[dict],
+    fiscal_year: int,
+    meeting_date: date | None,
+    attendees: list[str] | None = None,
+    summary: str = "",
+    key_points: list[str] | None = None,
+    resolutions: list[dict] | None = None,
+    segments: list[dict] | None = None,
     template_path: str | None = None,
 ) -> bytes:
     doc = _new_document(template_path)
 
-    _para(doc, f"รายงานการประชุม{series_name}", size=TITLE_SIZE, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _para(doc, "รายงานการประชุม", size=TITLE_SIZE, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+    _para(doc, series_name, size=HEADING_SIZE, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
     _para(
         doc,
         f"ครั้งที่ {thai_numeral(sequence_no)}/{thai_numeral(fiscal_year)}",
         size=HEADING_SIZE,
+        bold=True,
         align=WD_ALIGN_PARAGRAPH.CENTER,
     )
-    _para(
-        doc,
-        f"เมื่อวันที่ {thai_numeral(thai_date(meeting_date))}",
-        size=HEADING_SIZE,
-        align=WD_ALIGN_PARAGRAPH.CENTER,
-    )
-    doc.add_paragraph()
+    if meeting_date:
+        _para(
+            doc,
+            f"วัน{thai_date(meeting_date)}",
+            size=BODY_SIZE,
+            align=WD_ALIGN_PARAGRAPH.CENTER,
+        )
+
+    _para(doc)
 
     _para(doc, "ผู้มาประชุม", bold=True)
-    for i, name in enumerate(attendees, start=1):
-        _para(doc, f"{thai_numeral(i)}. {name}", indent_cm=1.27)
-    if not attendees:
-        _para(doc, "(ไม่ได้ระบุ)", indent_cm=1.27)
+    if attendees:
+        for i, name in enumerate(attendees, 1):
+            _para(doc, f"{thai_numeral(i)}. {name}", indent_cm=1.0)
+    else:
+        _para(doc, "- ตามบัญชีรายชื่อแนบท้าย -", indent_cm=1.0)
 
-    _para(doc, "เริ่มประชุมเวลา ๐๙.๐๐ น.", bold=True)
+    _para(doc)
+    _para(doc, "เริ่มประชุมเวลา ๐๙.๓๐ น.", indent_cm=1.0)
+    _para(doc)
 
-    _para(doc, "ระเบียบวาระที่ ๑ เรื่องที่ประธานแจ้งให้ที่ประชุมทราบ", size=HEADING_SIZE, bold=True)
-    _para(doc, "ประธานกล่าวเปิดการประชุมและแจ้งให้ที่ประชุมทราบตามระเบียบวาระ", indent_cm=1.27)
+    if summary:
+        _para(doc, "สาระสำคัญของการประชุม", bold=True)
+        _para(doc, summary, indent_cm=1.0)
+        _para(doc)
 
-    _para(doc, "ระเบียบวาระที่ ๒ เรื่องรับรองรายงานการประชุม", size=HEADING_SIZE, bold=True)
-    _para(
-        doc,
-        f"ที่ประชุมพิจารณารายงานการประชุมครั้งที่ {thai_numeral(max(sequence_no - 1, 0))}/"
-        f"{thai_numeral(fiscal_year)} แล้ว มีมติรับรองรายงานการประชุม",
-        indent_cm=1.27,
-    )
+    if key_points:
+        _para(doc, "ประเด็นที่ที่ประชุมได้หารือ", bold=True)
+        for point in key_points:
+            _para(doc, f"• {point}", indent_cm=1.0)
+        _para(doc)
 
-    _para(doc, "ระเบียบวาระที่ ๔ เรื่องเสนอเพื่อพิจารณา", size=HEADING_SIZE, bold=True)
-    if not resolutions:
-        _para(doc, "(ไม่มีมติจากการประชุมครั้งนี้)", indent_cm=1.27)
-    for i, r in enumerate(resolutions, start=1):
-        _para(doc, f"๔.{thai_numeral(i)} {r['title']}", bold=True, indent_cm=1.27)
-        _para(doc, f"มติที่ประชุม {r['text']}", indent_cm=1.27)
-        if r.get("assignees"):
-            due = f" กำหนดแล้วเสร็จภายในวันที่ {thai_numeral(thai_date(r['due_date']))}" if r.get("due_date") else ""
-            _para(doc, f"ผู้รับผิดชอบ {r['assignees']}{due}", indent_cm=1.27)
+    _para(doc, "มติที่ประชุม", bold=True)
+    if resolutions:
+        for r in resolutions:
+            ref = r.get("ref_no") or r.get("title") or ""
+            text = r.get("text") or ""
+            assignees = r.get("assignees") or ""
+            due = r.get("due_date")
+            cat = r.get("category") or ""
 
-    _para(doc, "ระเบียบวาระที่ ๕ เรื่องอื่น ๆ", size=HEADING_SIZE, bold=True)
-    _para(doc, "ไม่มี", indent_cm=1.27)
-    _para(doc, "เลิกประชุมเวลา ๑๒.๐๐ น.", bold=True)
+            head = f"{ref}: {text}" if ref and text else (ref or text)
+            _para(doc, head, bold=True, indent_cm=1.0)
 
-    #  บันทึกคำต่อคำแนบท้าย — เป็นหลักฐานให้ตรวจย้อนกลับได้
+            details = []
+            if assignees:
+                details.append(f"ผู้รับผิดชอบ: {assignees}")
+            if due:
+                details.append(f"กำหนดเสร็จ: {thai_date(due)}")
+            if cat:
+                details.append(f"ประเภท: {cat}")
+            if details:
+                _para(doc, " · ".join(details), size=Pt(14), indent_cm=1.5)
+    else:
+        _para(doc, "- ไม่มีมติในการประชุมครั้งนี้ -", indent_cm=1.0)
+
     if segments:
-        doc.add_page_break()
-        _para(doc, "เอกสารแนบ ๑ บันทึกถ้อยคำการประชุม", size=HEADING_SIZE, bold=True)
-        table = doc.add_table(rows=1, cols=3)
-        table.style = "Table Grid"
-        for cell, header in zip(table.rows[0].cells, ["เวลา", "ผู้พูด", "ข้อความ"]):
-            cell.text = header
+        _para(doc)
+        _para(doc, "บันทึกการประชุม (สรุป)", bold=True)
         for seg in segments:
-            cells = table.add_row().cells
-            cells[0].text = thai_numeral(_timecode(seg["start_ms"]))
-            cells[1].text = seg["speaker"]
-            cells[2].text = seg["text"]
+            speaker = seg.get("speaker") or seg.get("speaker_name") or ""
+            text = seg.get("text") or ""
+            line = f"{speaker}: {text}" if speaker else text
+            _para(doc, line, indent_cm=1.0)
+
+    _para(doc)
+    _para(doc, "เลิกประชุมเวลา ๑๖.๓๐ น.", indent_cm=1.0)
 
     _signature_block(doc)
+
     return _to_bytes(doc)
-
-
-def _timecode(ms: int) -> str:
-    total = int(ms // 1000)
-    return f"{total // 60:02d}:{total % 60:02d}"
