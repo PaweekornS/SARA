@@ -1,77 +1,238 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   SARA v2 — Design tokens  ·  "Official Calm"
+   ราชการร่วมสมัย: กระดาษอุ่น + หมึกน้ำเงิน + ตราทอง
+   ========================================================================== */
+
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --card: #ffffff;
-  --card-foreground: #0f172a;
-  --primary: #4f46e5;
-  --primary-foreground: #ffffff;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --border: #e2e8f0;
+  /* surfaces */
+  --paper: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #fafbfc;
+  --surface-sunken: #eef0f4;
+
+  /* ink */
+  --ink: #131a26;
+  --ink-2: #3d4757;
+  --ink-3: #6b7688;
+  --ink-4: #97a0b0;
+
+  /* lines */
+  --line: #dfe3ea;
+  --line-strong: #c8cfda;
+
+  /* brand — navy หมึกราชการ */
+  --brand: #1e3a6e;
+  --brand-hover: #172f5c;
+  --brand-soft: #e9eefa;
+  --brand-ink: #ffffff;
+
+  /* seal — ทองตราครุฑ ใช้เน้นเฉพาะจุด */
+  --seal: #9a7517;
+  --seal-soft: #fbf3df;
+
+  /* status */
+  --st-proposed: #6b7688;
+  --st-proposed-bg: #eef0f4;
+  --st-confirmed: #1e3a6e;
+  --st-confirmed-bg: #e9eefa;
+  --st-progress: #a35c07;
+  --st-progress-bg: #fdf1de;
+  --st-blocked: #b3261e;
+  --st-blocked-bg: #fceceb;
+  --st-done: #196b45;
+  --st-done-bg: #e6f4ed;
+  --st-cancelled: #7a8291;
+  --st-cancelled-bg: #f0f1f4;
+  --st-superseded: #6b4ba8;
+  --st-superseded-bg: #f0ebfa;
+
+  --danger: #b3261e;
+  --danger-bg: #fceceb;
+  --warn: #a35c07;
+  --warn-bg: #fdf1de;
+  --ok: #196b45;
+  --ok-bg: #e6f4ed;
+
+  --radius: 10px;
+  --shadow-1: 0 1px 2px rgba(19, 26, 38, 0.06), 0 1px 3px rgba(19, 26, 38, 0.04);
+  --shadow-2: 0 4px 12px rgba(19, 26, 38, 0.08), 0 1px 3px rgba(19, 26, 38, 0.04);
+  --shadow-3: 0 16px 40px rgba(19, 26, 38, 0.16);
+}
+
+.dark {
+  --paper: #0b111c;
+  --surface: #121a28;
+  --surface-2: #16202f;
+  --surface-sunken: #0e1622;
+
+  --ink: #eef1f6;
+  --ink-2: #c3cad6;
+  --ink-3: #8d97a7;
+  --ink-4: #6b7688;
+
+  --line: #222e42;
+  --line-strong: #31405a;
+
+  --brand: #7ea2e0;
+  --brand-hover: #9ab7e9;
+  --brand-soft: #182741;
+  --brand-ink: #0b111c;
+
+  --seal: #d9b256;
+  --seal-soft: #2a2313;
+
+  --st-proposed: #97a0b0;
+  --st-proposed-bg: #1c2637;
+  --st-confirmed: #7ea2e0;
+  --st-confirmed-bg: #182741;
+  --st-progress: #e0a54e;
+  --st-progress-bg: #2e2412;
+  --st-blocked: #ef8a83;
+  --st-blocked-bg: #33191a;
+  --st-done: #56c08c;
+  --st-done-bg: #12291f;
+  --st-cancelled: #8d97a7;
+  --st-cancelled-bg: #1b2434;
+  --st-superseded: #b193e8;
+  --st-superseded-bg: #231c39;
+
+  --danger: #ef8a83;
+  --danger-bg: #33191a;
+  --warn: #e0a54e;
+  --warn-bg: #2e2412;
+  --ok: #56c08c;
+  --ok-bg: #12291f;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 18px 44px rgba(0, 0, 0, 0.6);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-border: var(--border);
-  --font-sans: var(--font-geist-sans), Inter, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), monospace;
+  --color-paper: var(--paper);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-sunken: var(--surface-sunken);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-ink: var(--brand-ink);
+  --color-seal: var(--seal);
+  --color-seal-soft: var(--seal-soft);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-warn: var(--warn);
+  --color-warn-bg: var(--warn-bg);
+  --color-ok: var(--ok);
+  --color-ok-bg: var(--ok-bg);
+
+  --font-sans: var(--font-plex-thai), "IBM Plex Sans Thai", system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+  --font-doc: var(--font-sarabun), "TH Sarabun New", "Sarabun", serif;
+
+  --radius-base: var(--radius);
+}
+
+* {
+  border-color: var(--line);
+}
+
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Inter, sans-serif;
-  transition: background-color 0.3s ease, color 0.3s ease;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-plex-thai), "IBM Plex Sans Thai", system-ui, sans-serif;
+  font-feature-settings: "ss01";
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Custom scrollbar styling for a cleaner look */
+/* ตัวเลขแบบตารางสำหรับสถิติ/วันที่ ไม่ให้ขยับตอนนับถอยหลัง */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--foreground) 15%, transparent);
-  border-radius: 9999px;
+  background: color-mix(in srgb, var(--ink) 16%, transparent);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--foreground) 25%, transparent);
+  background: color-mix(in srgb, var(--ink) 28%, transparent);
+  background-clip: content-box;
 }
 
-/* Glassmorphism utility */
-.glass {
-  background: color-mix(in srgb, var(--card) 75%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in srgb, var(--foreground) 8%, transparent);
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
-/* Pulse glow animation for processing state */
-@keyframes pulseGlow {
-  0%, 100% {
-    box-shadow: 0 0 15px rgba(99, 102, 241, 0.15);
-    border-color: rgba(99, 102, 241, 0.25);
+/* กระดาษราชการ สำหรับ preview เอกสารก่อน export */
+.doc-paper {
+  font-family: var(--font-sarabun), "TH Sarabun New", serif;
+  font-size: 17px;
+  line-height: 1.55;
+  color: #101418;
+  background: #fff;
+}
+
+@keyframes sara-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
   }
-  50% {
-    box-shadow: 0 0 25px rgba(99, 102, 241, 0.4);
-    border-color: rgba(99, 102, 241, 0.55);
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
+.fade-up {
+  animation: sara-fade-up 0.28s ease-out both;
+}
 
-.pulse-glow {
-  animation: pulseGlow 2s infinite ease-in-out;
+@keyframes sara-sweep {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.sweep {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--brand) 14%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: sara-sweep 1.6s linear infinite;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
 }

@@ -1,93 +1,150 @@
-# app/services/llm.py
+"""
+ตัวเชื่อม LLM (AI4Thai Pathumma / ThaiLLM)
+
+ไฟล์นี้รู้แค่ "เรียกโมเดลยังไง" ไม่รู้เรื่องมติหรือการประชุม
+ตรรกะการสกัดมติอยู่ใน services/extraction.py
+"""
+
+from __future__ import annotations
+
 import json
 import logging
+import re
+
 from openai import OpenAI
+
 from app.core.config import settings
+
+# ── Global Variables & Constants ─────────────────────────────────────────────
 
 logger = logging.getLogger(__name__)
 
-# Initialize OpenAI client pointing to the Pathumma Tokenmind API Base
 client = OpenAI(
     base_url=settings.PATHUMMA_BASE_URL,
-    api_key=settings.APP_AI4THAI_API_KEY,  # Standard Authorization: Bearer
+    api_key=settings.APP_AI4THAI_API_KEY,
+    timeout=settings.LLM_TIMEOUT_SECONDS,
+    max_retries=3,
 )
 
-def summarize_with_qwen(transcript: str) -> dict:
-    """
-    Sends the meeting transcript to Pathumma/ThaiLLM model and extracts structured JSON.
-    """
-    system_prompt = """
-    You are an expert executive secretary. Process the following meeting transcript.
-    Your response MUST be a valid JSON object matching this schema exactly:
-    {
-      "executive_summary": ["bullet point 1", "bullet point 2"],
-      "key_decisions": ["decision 1"],
-      "action_items": [
-        {
-          "task": "Task description",
-          "assignee": "Name",
-          "due_date": "YYYY-MM-DD"
-        }
-      ]
+# AI4Thai gateway ต้องการ apikey header เพิ่มจาก Authorization ปกติ
+_EXTRA_HEADERS = {
+    "apikey": settings.APP_AI4THAI_API_KEY,
+    "x-api-key": settings.APP_AI4THAI_API_KEY,
+}
+
+
+# ── Classes & Exceptions ─────────────────────────────────────────────────────
+
+class LlmError(RuntimeError):
+    """เรียกโมเดลไม่สำเร็จ หรือได้คำตอบที่ใช้ต่อไม่ได้"""
+
+
+# ── Functions ────────────────────────────────────────────────────────────────
+
+def chat(
+    messages: list[dict],
+    temperature: float = 0.2,
+    json_mode: bool = False,
+    max_tokens: int = 2048,
+) -> str:
+    kwargs = {
+        "model": settings.PATHUMMA_MODEL_NAME,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "extra_headers": _EXTRA_HEADERS,
     }
-    Do not output any introductory or concluding text—ONLY raw JSON.
-    """
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
 
     try:
-        response = client.chat.completions.create(
-            # Pass custom apikey header required by AI4Thai API gateway
-            extra_headers={
-                "apikey": settings.APP_AI4THAI_API_KEY,
-                "x-api-key": settings.APP_AI4THAI_API_KEY,
-            },
-            model=settings.PATHUMMA_MODEL_NAME,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Transcript:\n{transcript}"}
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"}
-        )
+        response = client.chat.completions.create(**kwargs)
+    except Exception as err:  # noqa: BLE001
+        raise LlmError(f"เรียก {settings.PATHUMMA_MODEL_NAME} ไม่สำเร็จ: {err}") from err
 
-        content = response.choices[0].message.content
-        return json.loads(content)
+    content = (response.choices[0].message.content or "").strip()
+    if "</think>" in content:
+        content = content.split("</think>")[-1].strip()
 
-    except Exception as e:
-        logger.error(f"Error calling Pathumma LLM: {e}")
-        raise RuntimeError(f"Pathumma LLM Summarization failed: {e}")
+    if not content:
+        # Fallback to full raw text if think filter stripped everything
+        raw_msg = (response.choices[0].message.content or "").strip()
+        if raw_msg:
+            content = raw_msg
+        else:
+            raise LlmError("โมเดลตอบกลับมาเป็นค่าว่าง")
+    return content
 
 
-def ask_meeting_question(transcript: str, question: str, conversation_history: list = None) -> str:
+def chat_json(system: str, user: str, temperature: float = 0.1) -> dict:
     """
-    Q&A endpoint leveraging Pathumma LLM for Thai-aware meeting context Q&A.
+    ขอผลลัพธ์เป็น JSON — ลอง json_mode ก่อน ถ้า gateway ไม่รองรับค่อยแกะจากข้อความ
+    โมเดลเล็กชอบแนบคำอธิบายมาด้วย จึงต้องดึงเฉพาะก้อน JSON ออกมา
     """
-    if conversation_history is None:
-        conversation_history = []
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    try:
+        raw = chat(messages, temperature=temperature, json_mode=True)
+        return _parse_json(raw)
+    except Exception:
+        pass
 
-    system_prompt = (
-        "You are an AI meeting assistant. Answer the user's question based strictly on the "
-        "provided meeting transcript below. If the answer is not mentioned in the transcript, "
-        "state politely in Thai that it was not covered in the meeting.\n\n"
-        f"--- MEETING TRANSCRIPT ---\n{transcript}\n--------------------------"
+    raw = chat(messages, temperature=temperature, json_mode=False)
+    return _parse_json(raw)
+
+
+def _parse_json(raw: str) -> dict:
+    raw = raw.strip()
+    if "</think>" in raw:
+        after_think = raw.split("</think>")[-1].strip()
+        if after_think:
+            raw = after_think
+
+    fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", raw, re.DOTALL)
+    if fenced:
+        raw = fenced.group(1).strip()
+
+    try:
+        return json.loads(raw, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # หาก้อน {...} ที่ใหญ่ที่สุดในข้อความ
+    start, end = raw.find("{"), raw.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(raw[start : end + 1], strict=False)
+        except json.JSONDecodeError as err:
+            raise LlmError(f"โมเดลตอบกลับมาไม่ใช่ JSON ที่อ่านได้: {err}") from err
+
+    # หาก้อน [...]
+    start_arr, end_arr = raw.find("["), raw.rfind("]")
+    if start_arr != -1 and end_arr > start_arr:
+        try:
+            arr = json.loads(raw[start_arr : end_arr + 1], strict=False)
+            return {"new_resolutions": arr}
+        except json.JSONDecodeError as err:
+            raise LlmError(f"โมเดลตอบกลับมาไม่ใช่ JSON ที่อ่านได้: {err}") from err
+
+    raise LlmError("โมเดลตอบกลับมาโดยไม่มี JSON")
+
+
+def answer_from_context(question: str, context: str) -> str:
+    """
+    ตอบคำถามโดยอิงบริบทที่ส่งให้เท่านั้น
+    ถ้าไม่มีข้อมูลต้องบอกว่าไม่มี ห้ามเดา — คำตอบผิดในบริบทเอกสารราชการเสียหายกว่าไม่ตอบ
+    """
+    system = (
+        "คุณคือผู้ช่วยฝ่ายเลขานุการที่ประชุม ตอบคำถามโดยอ้างอิงจากข้อมูลที่ให้ไว้ด้านล่างเท่านั้น\n"
+        "ถ้าข้อมูลที่ให้ไม่ครอบคลุมคำถาม ให้ตอบตรง ๆ ว่าไม่พบข้อมูลในบันทึกการประชุม ห้ามเดาหรือเติมเอง\n"
+        "ตอบเป็นภาษาไทย กระชับ ไม่เกิน 5 ประโยค\n\n"
+        f"--- ข้อมูลการประชุม ---\n{context}\n-----------------------"
     )
-
-    messages = [{"role": "system", "content": system_prompt}]
-    for turn in conversation_history:
-        messages.append({"role": turn["role"], "content": turn["content"]})
-    messages.append({"role": "user", "content": question})
-
-    try:
-        response = client.chat.completions.create(
-            extra_headers={
-                "apikey": settings.APP_AI4THAI_API_KEY,
-                "x-api-key": settings.APP_AI4THAI_API_KEY,
-            },
-            model=settings.PATHUMMA_MODEL_NAME,
-            messages=messages,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content
-
-    except Exception as e:
-        logger.error(f"Failed to answer meeting question with Pathumma: {e}")
-        raise RuntimeError(f"Pathumma Q&A service error: {e}")
+    raw = chat(
+        [{"role": "system", "content": system}, {"role": "user", "content": question}],
+        temperature=0.2,
+    )
+    if "</think>" in raw:
+        after = raw.split("</think>")[-1].strip()
+        if after:
+            raw = after
+    return raw
