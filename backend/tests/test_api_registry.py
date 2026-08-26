@@ -1,5 +1,6 @@
 """
 M1 · M3 · M6 · M8 — ชุดการประชุม ทะเบียนบุคคล แดชบอร์ด และถาม-ตอบ
+Persona: NovaTech Studio & SaaS
 
     python -m unittest tests.test_api_registry -v
 """
@@ -27,22 +28,22 @@ class SeriesApi(DbCase):
         r = await self.client.post(
             "/api/series",
             json={
-                "name": "คณะกรรมการทดสอบ ปีงบประมาณ 2569",
-                "committee_type": "คณะกรรมการทดสอบ",
-                "fiscal_year": 2569,
-                "cadence": "monthly",
+                "name": "Alpha App Launch Sprint",
+                "committee_type": "Product Launch & Growth",
+                "fiscal_year": 2026,
+                "cadence": "weekly",
                 "next_meeting_date": "2026-09-15",
-                "member_ids": [str(self.f.chair.id)],
+                "member_ids": [str(self.f.phat.id)],
             },
         )
         self.assertEqual(r.status_code, 201)
         body = r.json()
-        self.assertEqual(body["name"], "คณะกรรมการทดสอบ ปีงบประมาณ 2569")
-        self.assertEqual(body["member_ids"], [str(self.f.chair.id)])
+        self.assertEqual(body["name"], "Alpha App Launch Sprint")
+        self.assertEqual(body["member_ids"], [str(self.f.phat.id)])
         self.assertEqual(body["org_id"], str(self.f.org.id))
 
     async def test_create_series_writes_audit(self):
-        await self.client.post("/api/series", json={"name": "ชุดใหม่", "fiscal_year": 2569})
+        await self.client.post("/api/series", json={"name": "ชุดใหม่", "fiscal_year": 2026})
         self.assertEqual(await self.count(m.AuditLog, action="create_series"), 1)
 
     async def test_list_series_only_from_this_org(self):
@@ -53,7 +54,7 @@ class SeriesApi(DbCase):
     async def test_get_series(self):
         r = await self.client.get(f"/api/series/{self.f.series.id}")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["fiscal_year"], 2569)
+        self.assertEqual(r.json()["fiscal_year"], 2026)
 
     async def test_get_missing_series_is_404_with_thai_detail(self):
         r = await self.client.get("/api/series/00000000-0000-0000-0000-000000000000")
@@ -92,7 +93,7 @@ class SeriesApi(DbCase):
 
     async def test_filter_resolutions_by_assignee(self):
         r = await self.client.get(
-            f"/api/series/{self.f.series.id}/resolutions?assignee={self.f.it.id}"
+            f"/api/series/{self.f.series.id}/resolutions?assignee={self.f.karn.id}"
         )
         self.assertEqual([row["ref_no"] for row in r.json()], [self.f.blocked_res.ref_no])
 
@@ -172,40 +173,40 @@ class PeopleApi(DbCase):
     async def test_list_people_sorted_by_name(self):
         r = await self.client.get("/api/people")
         names = [p["full_name"] for p in r.json()]
-        self.assertEqual(len(names), 4)
+        self.assertEqual(len(names), 5)
         self.assertEqual(names, sorted(names))
 
     async def test_create_person(self):
         r = await self.client.post(
             "/api/people",
             json={
-                "full_name": "นายสมชาย ใจดี",
-                "position": "นักวิเคราะห์นโยบาย",
-                "department": "ฝ่ายแผนงาน",
-                "email": "somchai@test.go.th",
+                "full_name": "สมชาย (Dev)",
+                "position": "Frontend Engineer",
+                "department": "Engineering",
+                "email": "somchai@novatech.io",
             },
         )
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(r.json()["full_name"], "นายสมชาย ใจดี")
+        self.assertEqual(r.json()["full_name"], "สมชาย (Dev)")
         self.assertEqual(await self.count(m.AuditLog, action="create_person"), 1)
 
     async def test_create_department_as_assignee(self):
-        """FR-M3-05 ผู้รับผิดชอบเป็นหน่วยงานได้"""
+        """FR-M3-05 ผู้รับผิดชอบเป็นหน่วยงาน/ทีมงานได้"""
         r = await self.client.post(
-            "/api/people", json={"full_name": "ฝ่ายแผนงาน", "is_department": True}
+            "/api/people", json={"full_name": "ทีม QA & Testing", "is_department": True}
         )
         self.assertEqual(r.status_code, 201)
         self.assertTrue(r.json()["is_department"])
 
     async def test_patch_person(self):
         r = await self.client.patch(
-            f"/api/people/{self.f.supply.id}", json={"full_name": "นางกาญจนา พูลสวัสดิ์", "position": "ผู้อำนวยการกองพัสดุ"}
+            f"/api/people/{self.f.mint.id}", json={"full_name": "มิ้น (Mint)", "position": "Head of Growth"}
         )
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["position"], "ผู้อำนวยการกองพัสดุ")
+        self.assertEqual(r.json()["position"], "Head of Growth")
 
     async def test_delete_person(self):
-        r = await self.client.delete(f"/api/people/{self.f.chair.id}")
+        r = await self.client.delete(f"/api/people/{self.f.phat.id}")
         self.assertEqual(r.status_code, 204)
         self.assertEqual(await self.count(m.AuditLog, action="delete_person"), 1)
 
@@ -216,26 +217,26 @@ class PeopleApi(DbCase):
     async def test_list_aliases(self):
         r = await self.client.get("/api/people/aliases")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual([a["alias"] for a in r.json()], ["ท่านประธาน"])
+        self.assertEqual(len(r.json()), 4)
 
     async def test_add_alias(self):
         """FR-M3-02 alias หลายค่าต่อคน"""
         r = await self.client.post(
-            "/api/people/aliases", json={"person_id": str(self.f.chair.id), "alias": "ท่าน ผอ."}
+            "/api/people/aliases", json={"person_id": str(self.f.phat.id), "alias": "Founder"}
         )
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(await self.count(m.PersonAlias, person_id=self.f.chair.id), 2)
+        self.assertEqual(await self.count(m.PersonAlias, person_id=self.f.phat.id), 3)
 
     async def test_duplicate_alias_returns_existing_not_error(self):
         r = await self.client.post(
-            "/api/people/aliases", json={"person_id": str(self.f.chair.id), "alias": "ท่านประธาน"}
+            "/api/people/aliases", json={"person_id": str(self.f.phat.id), "alias": "Product Lead"}
         )
         self.assertEqual(r.status_code, 201)
-        self.assertEqual(await self.count(m.PersonAlias, person_id=self.f.chair.id), 1)
+        self.assertEqual(await self.count(m.PersonAlias, person_id=self.f.phat.id), 2)
 
     async def test_blank_alias_is_422(self):
         r = await self.client.post(
-            "/api/people/aliases", json={"person_id": str(self.f.chair.id), "alias": "   "}
+            "/api/people/aliases", json={"person_id": str(self.f.phat.id), "alias": "   "}
         )
         self.assertEqual(r.status_code, 422)
         self.assertEqual(r.json()["detail"], "ชื่อเรียกว่างไม่ได้")
@@ -251,7 +252,7 @@ class PeopleApi(DbCase):
         aliases = (await self.client.get("/api/people/aliases")).json()
         r = await self.client.delete(f"/api/people/aliases/{aliases[0]['id']}")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(await self.count(m.PersonAlias), 0)
+        self.assertEqual(await self.count(m.PersonAlias), 3)
 
 
 class Dashboard(DbCase):
@@ -277,7 +278,7 @@ class Dashboard(DbCase):
         self.assertEqual(self.body["stats"]["closure_rate"], 33)
 
     async def test_avg_days_to_close(self):
-        self.assertEqual(self.body["stats"]["avg_days_to_close"], 29)
+        self.assertEqual(self.body["stats"]["avg_days_to_close"], 14)
 
     async def test_overdue_list_excludes_closed_and_cancelled(self):
         """มติที่ปิด/ยกเลิกแล้วเลยกำหนดมานาน แต่ต้องไม่ถูกนับว่าเกินกำหนด"""
@@ -297,7 +298,7 @@ class Dashboard(DbCase):
     async def test_assignee_load_sorted_by_overdue_first(self):
         load = self.body["load"]
         self.assertEqual(load[0]["overdue"], 1)
-        self.assertEqual({row["name"] for row in load}, {"ฝ่ายพัสดุ", "นางกาญจนา พูลสวัสดิ์", "นายวีระพงษ์ ศรีสมบูรณ์"})
+        self.assertEqual({row["name"] for row in load}, {"ทีมพัฒนาและวิศวกรรม", "มิ้น (Mint)", "กานต์ (Karn)"})
 
     async def test_empty_series_does_not_divide_by_zero(self):
         r = await self.client.get(f"/api/series/{self.f.other_series.id}/dashboard")
@@ -326,7 +327,7 @@ class Bootstrap(DbCase):
                 "links", "history", "proposals", "agendas", "actions", "audit", "qa",
             },
         )
-        self.assertEqual(len(body["people"]), 4)
+        self.assertEqual(len(body["people"]), 5)
         self.assertEqual(len(body["series"]), 2)
         self.assertEqual(len(body["meetings"]), 2)
         self.assertEqual(len(body["resolutions"]), 4)
@@ -335,8 +336,8 @@ class Bootstrap(DbCase):
 
     async def test_bootstrap_keeps_thai_text_intact(self):
         body = (await self.client.get("/api/bootstrap")).json()
-        self.assertEqual(body["org"]["name"], "สำนักงานทดสอบระบบ")
-        self.assertIn("ครุภัณฑ์คอมพิวเตอร์", body["resolutions"][0]["text"] + body["resolutions"][1]["text"] + body["resolutions"][2]["text"] + body["resolutions"][3]["text"])
+        self.assertEqual(body["org"]["name"], "NovaTech Studio (Demo Workspace)")
+        self.assertIn("โฆษณา", body["resolutions"][0]["text"] + body["resolutions"][1]["text"] + body["resolutions"][2]["text"] + body["resolutions"][3]["text"])
 
     async def test_bootstrap_without_organization_is_503_with_instructions(self):
         async with self.engine.begin() as conn:
@@ -350,7 +351,7 @@ class Bootstrap(DbCase):
     async def test_audit_entry_exposes_metadata_field(self):
         await self.add(
             m.AuditLog(
-                org_id=self.f.org.id, actor="ฝ่ายเลขานุการ", action="test",
+                org_id=self.f.org.id, actor="ภัทร (Phat)", action="test",
                 entity_type="meeting", entity_id=str(self.f.meeting1.id), meta="รายละเอียดไทย",
             )
         )
@@ -371,7 +372,7 @@ class ActorHeader(DbCase):
     async def test_percent_encoded_thai_actor_is_stored_readable(self):
         from urllib.parse import quote
 
-        actor = "นางสาวปรียานุช วัฒนสิน"
+        actor = "ภัทร (Phat)"
         r = await self.client.post(
             f"/api/resolutions/{self.f.open_res.id}/status",
             json={"status": "in_progress", "reason": "เริ่มดำเนินการแล้ว"},
@@ -411,7 +412,7 @@ class CrossMeetingQa(DbCase):
         return r.json()
 
     async def test_answer_from_resolution_table_has_citations_and_timeline(self):
-        body = await self.ask("เรื่องระบบสารบรรณอิเล็กทรอนิกส์เคยมีมติว่าอะไรบ้าง")
+        body = await self.ask("เรื่องระบบชำระเงิน Payment Gateway เคยมีมติว่าอะไรบ้าง")
         self.assertEqual(body["source"], "resolution_table")
         self.assertTrue(body["citations"])
         self.assertTrue(body["timeline"])
@@ -419,13 +420,13 @@ class CrossMeetingQa(DbCase):
             self.assertTrue(citation["quote"].strip())
 
     async def test_timeline_labels_are_thai_event_names(self):
-        body = await self.ask("ระบบสารบรรณอิเล็กทรอนิกส์")
+        body = await self.ask("Payment Gateway")
         labels = " ".join(entry["label"] for entry in body["timeline"])
         self.assertIn("เกิดมติ", labels)
         self.assertIn("รายงานความคืบหน้า", labels)
 
     async def test_falls_back_to_transcript_search(self):
-        body = await self.ask("ขอเปิดการประชุมครับ ที่ประชุมพูดถึงร่างขอบเขตของงานว่าอย่างไร")
+        body = await self.ask("งบประมาณรวม 500,000 บาทเดิมยังเหลือไหม")
         self.assertIn(body["source"], ("resolution_table", "semantic_search"))
 
     async def test_refuses_to_guess_when_nothing_matches(self):
@@ -439,13 +440,13 @@ class CrossMeetingQa(DbCase):
         self.assertEqual(r.status_code, 422)
 
     async def test_question_is_logged_and_returned_in_bootstrap(self):
-        await self.ask("ครุภัณฑ์คอมพิวเตอร์")
+        await self.ask("Payment Gateway")
         body = (await self.client.get("/api/bootstrap")).json()
         self.assertEqual(len(body["qa"][str(self.f.series.id)]), 1)
 
     async def test_other_series_does_not_see_these_resolutions(self):
         r = await self.client.post(
-            f"/api/series/{self.f.other_series.id}/ask", json={"question": "ครุภัณฑ์คอมพิวเตอร์"}
+            f"/api/series/{self.f.other_series.id}/ask", json={"question": "Payment Gateway"}
         )
         body = r.json()
         self.assertEqual(body["citations"], [])

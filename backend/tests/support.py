@@ -1,5 +1,5 @@
 """
-โครงร่างที่เคสระดับ API และ worker ใช้ร่วมกัน
+โครงร่างที่เคสระดับ API และ worker ใช้ร่วมกัน — Persona: NovaTech Studio & SaaS
 
 ทำไมต้องใช้ PostgreSQL จริงแทน SQLite:
     ตารางใช้ชนิด JSONB และ UUID ของ PostgreSQL โดยตรง (app/db/models.py)
@@ -127,14 +127,19 @@ class DbCase(unittest.IsolatedAsyncioTestCase):
 
 
 class Fixture:
-    """ข้อมูลตั้งต้นขนาดเล็กสำหรับเคส — เล็กกว่า app/seed.py แต่มีครบทุกความสัมพันธ์ที่ต้องทดสอบ"""
+    """ข้อมูลตั้งต้นขนาดเล็กสำหรับเคส — Persona: NovaTech Studio"""
 
     def __init__(self) -> None:
         self.org: m.Organization
+        self.phat: m.Person
+        self.rin: m.Person
+        self.karn: m.Person
+        self.mint: m.Person
+        self.dept: m.Person
+        # Aliases for backward compatibility in existing test suites
         self.chair: m.Person
         self.supply: m.Person
         self.it: m.Person
-        self.dept: m.Person
         self.series: m.MeetingSeries
         self.other_series: m.MeetingSeries
         self.meeting1: m.Meeting
@@ -149,52 +154,63 @@ class Fixture:
 
 async def build_fixture(sessionmaker) -> Fixture:
     """
-    สร้างชุดข้อมูลที่ครอบคลุมกรณีสำคัญ:
-      * มติค้างที่เกินกำหนด · มติที่เลื่อนซ้ำ 3 ครั้ง · มติที่ปิดแล้ว · มติที่ยกเลิก
-      * ชุดการประชุมที่สองไว้ตรวจว่าข้อมูลไม่รั่วข้ามชุด
-      * ผู้รับผิดชอบที่เป็นหน่วยงาน ไม่ใช่บุคคล
+    สร้างชุดข้อมูล NovaTech Studio:
+      * มติค้างที่เกินกำหนด · มติที่เลื่อนซ้ำ · มติที่ปิดแล้ว · มติที่ยกเลิก
+      * คอลเลกชันที่สองไว้ตรวจว่าข้อมูลไม่รั่วข้ามชุด
+      * ผู้รับผิดชอบที่เป็นหน่วยงาน/ทีมงาน ไม่ใช่บุคคล
     """
     f = Fixture()
-    #  กำหนดเสร็จตั้งเทียบกับวันนี้เสมอ ไม่งั้นเคสจะพังเองเมื่อเวลาผ่านไป
     today = date.today()
     f.overdue_by = 26
     due_overdue = today - timedelta(days=f.overdue_by)
     due_future = today + timedelta(days=18)
 
     async with sessionmaker() as s:
-        f.org = m.Organization(name="สำนักงานทดสอบระบบ")
+        f.org = m.Organization(name="NovaTech Studio (Demo Workspace)")
         s.add(f.org)
         await s.flush()
 
-        f.chair = m.Person(
-            org_id=f.org.id, full_name="นายธนกฤต อารีวงศ์", position="ผู้อำนวยการ",
-            department="สำนักผู้อำนวยการ", email="chair@test.go.th",
+        f.phat = m.Person(
+            org_id=f.org.id, full_name="ภัทร (Phat)", position="Head of Product / Founder",
+            department="Product & Strategy", email="phat@novatech.io",
         )
-        f.supply = m.Person(
-            org_id=f.org.id, full_name="นางกาญจนา พูลสวัสดิ์", position="หัวหน้าฝ่ายพัสดุ",
-            department="ฝ่ายพัสดุ", email="supply@test.go.th",
+        f.mint = m.Person(
+            org_id=f.org.id, full_name="มิ้น (Mint)", position="Growth & Marketing Lead",
+            department="Growth & Marketing", email="mint@novatech.io",
         )
-        f.it = m.Person(
-            org_id=f.org.id, full_name="นายวีระพงษ์ ศรีสมบูรณ์", position="หัวหน้าฝ่ายไอที",
-            department="ฝ่ายไอที", email="",  # ตั้งใจไม่มีอีเมล ใช้ทดสอบเส้นทางส่งไม่ได้
+        f.karn = m.Person(
+            org_id=f.org.id, full_name="กานต์ (Karn)", position="Lead Software Engineer",
+            department="Engineering", email="",  # ไม่มีอีเมล ใช้ทดสอบ validation ส่งออก
+        )
+        f.rin = m.Person(
+            org_id=f.org.id, full_name="ริน (Rin)", position="Lead Product Designer / Scrum Lead",
+            department="Design & UX", email="rin@novatech.io",
         )
         f.dept = m.Person(
-            org_id=f.org.id, full_name="ฝ่ายพัสดุ", position="หน่วยงาน",
-            department="ฝ่ายพัสดุ", email="dept@test.go.th", is_department=True,
+            org_id=f.org.id, full_name="ทีมพัฒนาและวิศวกรรม", position="ทีมงาน",
+            department="Engineering", email="dev@novatech.io", is_department=True,
         )
-        s.add_all([f.chair, f.supply, f.it, f.dept])
+        # Compatibility aliases
+        f.chair = f.phat
+        f.supply = f.mint
+        f.it = f.karn
+
+        s.add_all([f.phat, f.mint, f.karn, f.rin, f.dept])
         await s.flush()
 
-        s.add(m.PersonAlias(person_id=f.chair.id, alias="ท่านประธาน", source="manual", confidence=1.0))
+        s.add(m.PersonAlias(person_id=f.phat.id, alias="ท่านประธาน", source="manual", confidence=1.0))
+        s.add(m.PersonAlias(person_id=f.phat.id, alias="Product Lead", source="manual", confidence=1.0))
+        s.add(m.PersonAlias(person_id=f.karn.id, alias="Tech Lead", source="manual", confidence=1.0))
+        s.add(m.PersonAlias(person_id=f.mint.id, alias="Marketing Lead", source="manual", confidence=1.0))
 
         f.series = m.MeetingSeries(
-            org_id=f.org.id, name="คณะกรรมการบริหาร ปีงบประมาณ 2569",
-            committee_type="คณะกรรมการบริหาร", fiscal_year=2569, cadence="monthly",
-            next_meeting_date=date(2026, 9, 20), member_ids=[str(f.chair.id), str(f.supply.id)],
+            org_id=f.org.id, name="Alpha App Q3 Launch Campaign",
+            committee_type="Product Launch & Growth", fiscal_year=2026, cadence="weekly",
+            next_meeting_date=date(2026, 8, 14), member_ids=[str(f.phat.id), str(f.mint.id), str(f.karn.id), str(f.rin.id)],
         )
         f.other_series = m.MeetingSeries(
-            org_id=f.org.id, name="คณะกรรมการวิชาการ ปีงบประมาณ 2569",
-            committee_type="คณะกรรมการวิชาการ", fiscal_year=2569, cadence="quarterly",
+            org_id=f.org.id, name="Core Backend & AI Microservices",
+            committee_type="Engineering & Tech Standup", fiscal_year=2026, cadence="bi-weekly",
         )
         s.add_all([f.series, f.other_series])
         await s.flush()
@@ -204,66 +220,66 @@ async def build_fixture(sessionmaker) -> Fixture:
             for stage in ("upload", "asr", "extract", "done")
         ]
         f.meeting1 = m.Meeting(
-            series_id=f.series.id, sequence_no=1, fiscal_year=2569, meeting_date=date(2026, 5, 20),
-            title="การประชุมครั้งที่ 1/2569", source_kind="audio",
+            series_id=f.series.id, sequence_no=1, fiscal_year=2026, meeting_date=date(2026, 7, 10),
+            title="Kickoff: Scope & Budget Allocation", source_kind="audio",
             status=m.MeetingStatus.DISTRIBUTED, pipeline=done_pipeline,
-            approved_at=datetime(2026, 5, 20, 16, 0), approved_by="ฝ่ายเลขานุการ",
+            approved_at=datetime(2026, 7, 10, 11, 30), approved_by="ภัทร (Phat)",
         )
         f.meeting2 = m.Meeting(
-            series_id=f.series.id, sequence_no=2, fiscal_year=2569, meeting_date=date(2026, 6, 18),
-            title="การประชุมครั้งที่ 2/2569", source_kind="audio",
+            series_id=f.series.id, sequence_no=2, fiscal_year=2026, meeting_date=date(2026, 7, 24),
+            title="Sprint Review: Beta Readiness & Ad Visuals", source_kind="audio",
             status=m.MeetingStatus.DISTRIBUTED, pipeline=done_pipeline,
-            approved_at=datetime(2026, 6, 18, 16, 0), approved_by="ฝ่ายเลขานุการ",
+            approved_at=datetime(2026, 7, 24, 11, 30), approved_by="ภัทร (Phat)",
         )
         s.add_all([f.meeting1, f.meeting2])
         await s.flush()
 
         f.segment = m.TranscriptSegment(
-            meeting_id=f.meeting2.id, speaker_label="SPEAKER_00", person_id=f.chair.id,
-            start_ms=688_000, end_ms=700_000,
-            text="ที่ประชุมมีมติมอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน สำหรับการจัดซื้อครุภัณฑ์คอมพิวเตอร์ทดแทน",
+            meeting_id=f.meeting2.id, speaker_label="SPEAKER_01", person_id=f.phat.id,
+            start_ms=135_000, end_ms=150_000,
+            text="งบรวม 500,000 บาทเดิมยังเหลือไหม ถ้ายังอยู่ใน Cap 5 แสน เกลี่ยจากงบ Google Search Ads มาได้เลย ผมอนุมัติ",
             confidence=0.97,
         )
         s.add(f.segment)
         await s.flush()
 
         f.open_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 2/2569 ข้อ 4.1", origin_meeting_id=f.meeting2.id,
-            origin_segment_id=f.segment.id, origin_agenda_item="วาระที่ 4.1",
-            text="มอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน (TOR) สำหรับการจัดซื้อครุภัณฑ์คอมพิวเตอร์ทดแทน จำนวน 42 เครื่อง",
-            category="procurement", status=m.ResolutionStatus.CONFIRMED,
-            proposer_person_id=f.chair.id, due_date=due_overdue,
+            series_id=f.series.id, ref_no="Action #2 (Growth & Marketing)", origin_meeting_id=f.meeting2.id,
+            origin_segment_id=f.segment.id, origin_agenda_item="วาระการตลาด",
+            text="คุมงบยิงโฆษณา Alpha Launch รวมไม่เกิน 500,000 บาท โดยเกลี่ยงบ 50,000 บาทสำหรับ Tech Influencer 2 ช่อง",
+            category="budget", status=m.ResolutionStatus.CONFIRMED,
+            proposer_person_id=f.phat.id, due_date=due_overdue,
             original_due_date=due_overdue, extraction_confidence=0.97,
-            created_at=datetime(2026, 6, 18, 14, 0),
+            created_at=datetime(2026, 7, 24, 11, 0),
         )
         f.blocked_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 1/2569 ข้อ 4.2", origin_meeting_id=f.meeting1.id,
-            text="ให้ฝ่ายเทคโนโลยีสารสนเทศเร่งรัดผู้รับจ้างให้ส่งมอบระบบสารบรรณอิเล็กทรอนิกส์ให้ครบทุกโมดูล",
+            series_id=f.series.id, ref_no="Action #1 (Tech Architecture)", origin_meeting_id=f.meeting1.id,
+            text="เชื่อมต่อ Payment Gateway ทั้งระบบบัตรเครดิตและ PromptPay ให้พร้อมรับชำระเงินจริงในรอบ Beta Launch",
             category="operations", status=m.ResolutionStatus.BLOCKED,
-            due_date=due_future, original_due_date=date(2026, 3, 31), postpone_count=3,
-            extraction_confidence=0.93, created_at=datetime(2026, 5, 20, 14, 0),
+            due_date=due_future, original_due_date=date(2026, 7, 28), postpone_count=3,
+            extraction_confidence=0.93, created_at=datetime(2026, 7, 10, 10, 30),
         )
         f.done_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 1/2569 ข้อ 4.1", origin_meeting_id=f.meeting1.id,
-            text="ให้ทุกฝ่ายจัดทำแผนปฏิบัติการประจำปีงบประมาณ 2569",
-            category="policy", status=m.ResolutionStatus.DONE, due_date=due_overdue,
+            series_id=f.series.id, ref_no="Action #3 (Product & Design)", origin_meeting_id=f.meeting1.id,
+            text="เปิดหน้า Landing Page สำหรับลงทะเบียน Early-bird Subscription ราคาพิเศษ 299 บาท/เดือน ภายในวันศุกร์นี้",
+            category="operations", status=m.ResolutionStatus.DONE, due_date=due_overdue,
             original_due_date=due_overdue, closed_meeting_id=f.meeting2.id,
-            closed_at=datetime(2026, 6, 18, 15, 0), created_at=datetime(2026, 5, 20, 14, 0),
+            closed_at=datetime(2026, 7, 24, 11, 30), created_at=datetime(2026, 7, 10, 11, 0),
         )
         f.cancelled_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 1/2569 ข้อ 5.1", origin_meeting_id=f.meeting1.id,
-            text="ให้จัดกิจกรรมสัมมนาประจำปีนอกสถานที่",
-            category="operations", status=m.ResolutionStatus.CANCELLED, due_date=due_overdue,
-            original_due_date=due_overdue, created_at=datetime(2026, 5, 20, 15, 0),
+            series_id=f.series.id, ref_no="Action #0 (Legacy)", origin_meeting_id=f.meeting1.id,
+            text="ยกเลิกการซื้อสื่อโฆษณาผ่านบิลบอร์ดริมทางด่วน",
+            category="marketing", status=m.ResolutionStatus.CANCELLED, due_date=due_overdue,
+            original_due_date=due_overdue, created_at=datetime(2026, 7, 10, 11, 15),
         )
         s.add_all([f.open_res, f.blocked_res, f.done_res, f.cancelled_res])
         await s.flush()
 
         s.add_all(
             [
-                m.ResolutionAssignee(resolution_id=f.open_res.id, person_id=f.dept.id, department_name="ฝ่ายพัสดุ"),
-                m.ResolutionAssignee(resolution_id=f.open_res.id, person_id=f.supply.id, department_name="ฝ่ายพัสดุ"),
-                m.ResolutionAssignee(resolution_id=f.blocked_res.id, person_id=f.it.id, department_name="ฝ่ายไอที"),
+                m.ResolutionAssignee(resolution_id=f.open_res.id, person_id=f.dept.id, department_name="Growth & Marketing"),
+                m.ResolutionAssignee(resolution_id=f.open_res.id, person_id=f.mint.id, department_name="Growth & Marketing"),
+                m.ResolutionAssignee(resolution_id=f.blocked_res.id, person_id=f.karn.id, department_name="Engineering"),
             ]
         )
         s.add_all(
@@ -271,21 +287,21 @@ async def build_fixture(sessionmaker) -> Fixture:
                 m.ResolutionLink(
                     resolution_id=f.open_res.id, meeting_id=f.meeting2.id, link_type=m.LinkType.CREATED,
                     segment_id=f.segment.id, evidence_text=f.segment.text,
-                    evidence_start_ms=688_000, confidence=0.97,
-                    created_at=datetime(2026, 6, 18, 14, 0),
+                    evidence_start_ms=135_000, confidence=0.97,
+                    created_at=datetime(2026, 7, 24, 11, 0),
                 ),
                 m.ResolutionLink(
                     resolution_id=f.blocked_res.id, meeting_id=f.meeting1.id, link_type=m.LinkType.CREATED,
-                    evidence_text="ที่ประชุมมีมติให้ปรับปรุงระบบสารบรรณอิเล็กทรอนิกส์",
-                    evidence_start_ms=120_000, confidence=0.94,
-                    created_at=datetime(2026, 5, 20, 14, 0),
+                    evidence_text="วางแผนเชื่อมต่อ Payment Gateway เพื่อรองรับรอบ Beta",
+                    evidence_start_ms=0, confidence=0.95,
+                    created_at=datetime(2026, 7, 10, 10, 0),
                 ),
                 m.ResolutionLink(
                     resolution_id=f.blocked_res.id, meeting_id=f.meeting2.id,
                     link_type=m.LinkType.PROGRESS_REPORTED,
-                    evidence_text="ผู้รับจ้างส่งมอบโมดูลไม่ครบ ทำให้ยังทดสอบระบบไม่ได้",
-                    evidence_start_ms=1_040_000, confidence=0.93,
-                    created_at=datetime(2026, 6, 18, 15, 10),
+                    evidence_text="ติดปัญหา Production Key จากผู้ให้บริการ (Blocked)",
+                    evidence_start_ms=120_000, confidence=0.92,
+                    created_at=datetime(2026, 7, 24, 10, 30),
                 ),
             ]
         )

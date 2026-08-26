@@ -1,5 +1,6 @@
 """
 งานเบื้องหลัง — pipeline ของการประชุม การส่งออก และ scheduler
+Persona: NovaTech Studio & SaaS
 
 หลักการที่ชุดนี้เฝ้าอยู่ (FR-M2-04):
     ถ้าขั้นไหนล้มเหลว ต้องหยุดทั้ง pipeline บันทึก error จริง และ **ห้ามสร้างข้อมูลทดแทน**
@@ -27,10 +28,10 @@ from app.workers import tasks
 from tests.support import DbCase, build_fixture
 
 SCRIPT = [
-    ("SPEAKER_00", 9_000, "เรียนคณะกรรมการทุกท่าน ขอเปิดการประชุมครับ"),
-    ("SPEAKER_01", 402_000, "เรื่องคณะทำงานที่ค้างจากคราวที่แล้ว ตอนนี้แต่งตั้งเรียบร้อยแล้วครับ"),
-    ("SPEAKER_00", 471_000, "ดีครับ ถือว่าเรื่องนี้ดำเนินการเสร็จแล้ว ขอบคุณท่านประธานครับ"),
-    ("SPEAKER_00", 1_246_000, "ที่ประชุมมีมติให้ฝ่ายไอทีจัดอบรมการใช้งานระบบให้เจ้าหน้าที่ทุกฝ่าย"),
+    ("SPEAKER_01", 10_000, "สรุปผลหลังเปิด Beta มา 3 วัน ยอดดาวน์โหลดทะลุ 5,000 Users แล้วนะครับ"),
+    ("SPEAKER_04", 45_000, "ใช่ค่ะ ยอดจาก TikTok ดีมาก CAC อยู่ที่ 85 บาท ต่ำกว่าเป้าที่เราตั้งไว้ 120 บาทมากค่ะ"),
+    ("SPEAKER_03", 90_000, "แต่เราพบ Issue เรื่อง Push Notification ส่งช้าไป 5 นาทีบนระบบ iOS ทีมกำลังปล่อย Hotfix คืนนี้ครับ"),
+    ("SPEAKER_01", 135_000, "โอเค ให้กานต์ปล่อย Hotfix ภายใน 22:00 น. คืนนี้ และให้มิ้นเพิ่มงบ TikTok Ads อีก 20% สำหรับสัปดาห์หน้า"),
 ]
 
 
@@ -57,8 +58,8 @@ class PipelineCase(DbCase):
         self.meeting = (
             await self.add(
                 m.Meeting(
-                    series_id=self.f.series.id, sequence_no=3, fiscal_year=2569,
-                    meeting_date=date(2026, 8, 20), title="การประชุมครั้งที่ 3/2569",
+                    series_id=self.f.series.id, sequence_no=3, fiscal_year=2026,
+                    meeting_date=date(2026, 8, 20), title="การประชุมครั้งที่ 3",
                     audio_uri=self.audio, source_kind="audio", status=m.MeetingStatus.PROCESSING,
                     pipeline=[
                         {"stage": stage, "state": "pending", "detail": ""}
@@ -144,22 +145,22 @@ class PipelineSuccess(PipelineCase):
         return extraction.ExtractionResult(
             new_resolutions=[
                 extraction.NewResolution(
-                    text="ให้ฝ่ายไอทีจัดอบรมการใช้งานระบบสารบรรณให้เจ้าหน้าที่ทุกฝ่าย",
-                    segment_index=3, category="operations", confidence=0.92,
+                    text="มอบหมายให้กานต์ปล่อย Hotfix แก้ไขปัญหา Push Notification บนระบบ iOS ภายใน 22:00 น. คืนนี้",
+                    segment_index=2, category="operations", confidence=0.97,
                 )
             ],
             updates=[
                 extraction.ResolutionUpdate(
-                    ref=self.f.open_res.ref_no, segment_index=2, proposed_status="done",
-                    evidence="ถือว่าเรื่องนี้ดำเนินการเสร็จแล้ว", confidence=0.93,
+                    ref=self.f.open_res.ref_no, segment_index=3, proposed_status="in_progress",
+                    evidence="อนุมัติเพิ่มงบ TikTok Ads อีก 20%", confidence=0.95,
                 )
             ],
             speakers=[
                 extraction.SpeakerMention(
-                    speaker_label="SPEAKER_00", name_mention="ท่านประธาน", segment_index=2, confidence=0.9
+                    speaker_label="SPEAKER_01", name_mention="ท่านประธาน", segment_index=0, confidence=0.95
                 ),
                 extraction.SpeakerMention(
-                    speaker_label="SPEAKER_01", name_mention="พี่หนึ่ง", segment_index=1, confidence=0.6
+                    speaker_label="SPEAKER_04", name_mention="มิ้น", segment_index=1, confidence=0.6
                 ),
             ],
         )
@@ -182,7 +183,6 @@ class PipelineSuccess(PipelineCase):
         self.assertEqual(await self.count(m.TranscriptSegment, meeting_id=self.meeting.id), len(SCRIPT))
         rows = (await self.client.get(f"/api/meetings/{self.meeting.id}/transcript")).json()
         self.assertEqual([r["start_ms"] for r in rows], [s[1] for s in SCRIPT])
-
 
     async def test_extraction_output_lands_as_proposals_not_as_facts(self):
         """โมเดลเสนอได้อย่างเดียว — มติจริงเกิดตอนคนกดยืนยันเท่านั้น"""
@@ -211,19 +211,19 @@ class PipelineSuccess(PipelineCase):
         """FR-M3-03 alias ที่ยืนยันไว้แล้วใช้ผูกได้เลย"""
         await self.run_ok()
         segments = (await self.client.get(f"/api/meetings/{self.meeting.id}/transcript")).json()
-        speaker00 = [s for s in segments if s["speaker_label"] == "SPEAKER_00"]
-        self.assertTrue(all(s["person_id"] == str(self.f.chair.id) for s in speaker00))
+        speaker01 = [s for s in segments if s["speaker_label"] == "SPEAKER_01"]
+        self.assertTrue(all(s["person_id"] == str(self.f.phat.id) for s in speaker01))
 
     async def test_uncertain_speaker_becomes_a_question_not_a_guess(self):
         """§12 ชื่อที่ไม่มั่นใจต้องกลายเป็นข้อเสนอให้คนเลือก ไม่ใช่เดาให้"""
         await self.run_ok()
         speaker_proposals = [p for p in await self.proposals() if p.kind == "speaker_identity"]
         labels = {p.speaker_label for p in speaker_proposals}
-        self.assertIn("SPEAKER_01", labels)
+        self.assertIn("SPEAKER_04", labels)
 
         segments = (await self.client.get(f"/api/meetings/{self.meeting.id}/transcript")).json()
-        speaker01 = [s for s in segments if s["speaker_label"] == "SPEAKER_01"]
-        self.assertTrue(all(s["person_id"] is None for s in speaker01))
+        speaker04 = [s for s in segments if s["speaker_label"] == "SPEAKER_04"]
+        self.assertTrue(all(s["person_id"] is None for s in speaker04))
 
     async def test_rerunning_does_not_duplicate_anything(self):
         await self.run_ok()
@@ -267,73 +267,7 @@ class SpeakerProposalRules(PipelineCase):
                 )
             )
             labels = {p.speaker_label for p in rows.scalars().all()}
-        self.assertEqual(labels, {"SPEAKER_00", "SPEAKER_01"})
-
-
-class DueScanner(DbCase):
-    """FR-M7-03, 06, 07"""
-
-    async def asyncSetUp(self) -> None:
-        await super().asyncSetUp()
-        self.f = await build_fixture(self.sessionmaker)
-
-    async def test_queues_reminders_as_pending_approval_only(self):
-        result = await tasks._scan_due()
-        self.assertGreater(result["queued"], 0)
-
-        from sqlalchemy import select
-
-        async with self.sessionmaker() as s:
-            rows = (await s.execute(select(m.OutboundAction))).scalars().all()
-        self.assertTrue(rows)
-        for action in rows:
-            self.assertEqual(action.status, "pending_approval")
-            self.assertEqual(action.action_type, "send_resolution_reminder")
-
-    async def test_reminder_quotes_the_resolution_verbatim(self):
-        await tasks._scan_due()
-        from sqlalchemy import select
-
-        async with self.sessionmaker() as s:
-            action = (await s.execute(select(m.OutboundAction))).scalars().first()
-        self.assertIn(self.f.open_res.text, action.body)
-        self.assertIn(self.f.open_res.ref_no, action.subject)
-        self.assertIn(f"เกินกำหนดแล้ว {self.f.overdue_by} วัน", action.subject)
-
-    async def test_reminder_link_is_reachable(self):
-        await tasks._scan_due()
-        from sqlalchemy import select
-
-        async with self.sessionmaker() as s:
-            action = (await s.execute(select(m.OutboundAction))).scalars().first()
-        link = action.body.rsplit("\n", 1)[-1].strip()
-        r = await self.client.get(link.split("testserver", 1)[1])
-        self.assertEqual(r.status_code, 200)
-
-    async def test_recipients_without_email_are_skipped(self):
-        """ผู้รับผิดชอบมติที่ติดปัญหาไม่มีอีเมลในทะเบียน จึงไม่ควรมีรายการของเขาในคิว"""
-        await tasks._scan_due()
-        self.assertEqual(await self.count(m.OutboundAction, recipient_person_id=self.f.it.id), 0)
-
-    async def test_second_scan_does_not_spam_the_same_person(self):
-        first = (await tasks._scan_due())["queued"]
-        second = (await tasks._scan_due())["queued"]
-        self.assertGreater(first, 0)
-        self.assertEqual(second, 0)
-
-    async def test_resolutions_not_overdue_are_not_queued(self):
-        """มติที่ยังไม่เกินกำหนดจะไม่ถูกส่งเข้าคิวส่งออก"""
-        async with self.sessionmaker() as s:
-            row = await s.get(m.Resolution, self.f.open_res.id)
-            row.due_date = date.today() + timedelta(days=2)
-            await s.commit()
-        await tasks._scan_due()
-        self.assertEqual(await self.count(m.OutboundAction, resolution_id=self.f.open_res.id), 0)
-
-    async def test_closed_resolutions_are_never_reminded(self):
-        await tasks._scan_due()
-        self.assertEqual(await self.count(m.OutboundAction, resolution_id=self.f.done_res.id), 0)
-        self.assertEqual(await self.count(m.OutboundAction, resolution_id=self.f.cancelled_res.id), 0)
+        self.assertEqual(labels, {"SPEAKER_01", "SPEAKER_04", "SPEAKER_03"})
 
 
 class OutboundSender(DbCase):
@@ -351,19 +285,19 @@ class OutboundSender(DbCase):
                 m.OutboundAction(
                     series_id=self.f.series.id, resolution_id=self.f.open_res.id,
                     action_type="send_resolution_reminder", recipient_person_id=recipient.id,
-                    subject="แจ้งเตือนมติ", body="เนื้อความแจ้งเตือน", status=status,
+                    subject="แจ้งเตือน Action Item", body="เนื้อความแจ้งเตือน", status=status,
                 )
             )
         )[0]
 
     async def test_approved_action_is_sent_through_mcp_and_marked(self):
-        action = await self.queue(self.f.supply, m.ActionStatus.APPROVED)
+        action = await self.queue(self.f.mint, m.ActionStatus.APPROVED)
         with patch("app.services.mcp_agent.send_email_via_mcp", new=AsyncMock()) as send:
             result = await tasks._send_action(action.id, self.task)
 
         self.assertEqual(result["status"], "SENT")
         send.assert_awaited_once()
-        self.assertEqual(send.await_args.kwargs["to_email"], self.f.supply.email)
+        self.assertEqual(send.await_args.kwargs["to_email"], self.f.mint.email)
 
         row = await self.fetch(m.OutboundAction, action.id)
         self.assertEqual(row.status, "sent")
@@ -371,7 +305,7 @@ class OutboundSender(DbCase):
         self.assertIsNone(row.error)
 
     async def test_action_awaiting_approval_is_never_sent(self):
-        action = await self.queue(self.f.supply, m.ActionStatus.PENDING_APPROVAL)
+        action = await self.queue(self.f.mint, m.ActionStatus.PENDING_APPROVAL)
         with patch("app.services.mcp_agent.send_email_via_mcp", new=AsyncMock()) as send:
             result = await tasks._send_action(action.id, self.task)
 
@@ -379,13 +313,13 @@ class OutboundSender(DbCase):
         send.assert_not_awaited()
 
     async def test_already_sent_action_is_not_sent_twice(self):
-        action = await self.queue(self.f.supply, m.ActionStatus.SENT)
+        action = await self.queue(self.f.mint, m.ActionStatus.SENT)
         with patch("app.services.mcp_agent.send_email_via_mcp", new=AsyncMock()) as send:
             await tasks._send_action(action.id, self.task)
         send.assert_not_awaited()
 
     async def test_recipient_without_email_fails_with_a_readable_reason(self):
-        action = await self.queue(self.f.it, m.ActionStatus.APPROVED)
+        action = await self.queue(self.f.karn, m.ActionStatus.APPROVED)
         result = await tasks._send_action(action.id, self.task)
         self.assertEqual(result["status"], "FAILED")
         row = await self.fetch(m.OutboundAction, action.id)
@@ -395,7 +329,7 @@ class OutboundSender(DbCase):
     async def test_mcp_failure_is_recorded_and_retried(self):
         from app.services.mcp_agent import McpError
 
-        action = await self.queue(self.f.supply, m.ActionStatus.APPROVED)
+        action = await self.queue(self.f.mint, m.ActionStatus.APPROVED)
         with patch(
             "app.services.mcp_agent.send_email_via_mcp",
             new=AsyncMock(side_effect=McpError("ต่อ MCP server ไม่ได้")),

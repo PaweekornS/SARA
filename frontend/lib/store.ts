@@ -59,14 +59,14 @@ export interface AppState {
   activeSeriesId?: string | null;
 }
 
-const STORAGE_KEY = "sara_v2_state";
+const STORAGE_KEY = "sara_v4_novatech_state";
 
 function freshState(): AppState {
   return {
     db: createSeedDatabase(),
     lang: "th",
     theme: "light",
-    actor: "นางสาวปรียานุช วัฒนสิน",
+    actor: "ภัทร (Phat)",
     loading: false,
     lastError: null,
     activeSeriesId: null,
@@ -109,6 +109,14 @@ export function hydrate() {
   if (hydrated || typeof window === "undefined") return;
   hydrated = true;
 
+  // Clear legacy cache keys
+  try {
+    window.localStorage.removeItem("sara_v2_state");
+    window.localStorage.removeItem("sara_v3_state");
+  } catch {
+    /* ignore */
+  }
+
   if (LIVE) {
     /* ต่อ backend จริง — ข้อมูลมาจากฐานเสมอ ไม่อ่านของเก่าใน localStorage */
     applyTheme(state.theme);
@@ -120,10 +128,22 @@ export function hydrate() {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as AppState;
-      if (parsed?.db?.resolutions) state = parsed;
+      // Validate schema: must contain new NovaTech series
+      const isNovaTech = parsed?.db?.series?.some((s) => s.id === DEMO_SERIES_ID);
+      if (isNovaTech && parsed?.db?.resolutions) {
+        state = parsed;
+      } else {
+        state = freshState();
+        persist();
+      }
+    } else {
+      state = freshState();
+      persist();
     }
   } catch {
     /* ข้อมูลเก่าพัง — เริ่มใหม่จาก seed */
+    state = freshState();
+    persist();
   }
   applyTheme(state.theme);
   emit();
@@ -135,6 +155,9 @@ export function resetDemo() {
   persist();
   applyTheme(state.theme);
   emit();
+  if (LIVE) {
+    void http.resetDemoBackend().then(() => loadFromServer(true)).catch(() => {});
+  }
 }
 
 function subscribe(listener: () => void) {
@@ -177,6 +200,19 @@ export async function loadFromServer(silent = false): Promise<void> {
   if (!silent) set((s) => ({ ...s, loading: true }));
   try {
     const db = await http.fetchBootstrap();
+    const isNovaTech = db?.org?.name === "NovaTech Studio (Demo Workspace)" || db?.series?.some((s) => s.name?.includes("Alpha App"));
+    if (!isNovaTech) {
+      try {
+        await http.resetDemoBackend();
+        const freshDb = await http.fetchBootstrap();
+        set((s) => ({ ...s, db: freshDb, loading: false, lastError: null }));
+        return;
+      } catch {
+        // Fallback to fresh seed state if backend reset fails
+        set((s) => ({ ...s, db: freshState().db, loading: false, lastError: null }));
+        return;
+      }
+    }
     set((s) => ({ ...s, db, loading: false, lastError: null }));
   } catch (err) {
     set((s) => ({
@@ -259,18 +295,29 @@ function audit(db: Database, action: string, entity_type: string, entity_id: str
 
 /* ── M1 · Meeting Series ─────────────────────────────────────────────── */
 
-export function createSeries(input: Omit<MeetingSeries, "id" | "org_id">) {
+export function createSeries(input: Partial<MeetingSeries> & { name: string }) {
   const id = uid("ser");
+  const full: MeetingSeries = {
+    id,
+    org_id: state.db.org.id,
+    committee_type: "general",
+    fiscal_year: new Date().getFullYear() + 543,
+    agenda_template_id: "tmpl-general",
+    cadence: "adhoc",
+    next_meeting_date: null,
+    member_ids: [],
+    ...input,
+  };
   mutate((db) =>
     audit(
-      { ...db, series: [...db.series, { ...input, id, org_id: db.org.id }] },
+      { ...db, series: [...db.series, full] },
       "create_series",
       "meeting_series",
       id,
       input.name,
     ),
   );
-  sync(() => http.createSeries({ ...input }, state.actor));
+  sync(() => http.createSeries({ ...full }, state.actor));
   return id;
 }
 
@@ -513,72 +560,37 @@ function runExtraction(meetingId: Uuid) {
 
   const proposals: Proposal[] = [];
 
-  /* 1) จับคู่คำพูดใหม่กับมติค้างของ series → เสนอปิดมติ C (ต้องมีคนยืนยัน) */
-  const closeSeg = find("แต่งตั้งเรียบร้อยแล้ว");
-  if (closeSeg) {
+  /* 1) จับคู่คำพูดใหม่กับการเพิ่มงบโฆษณา */
+  const adSeg = find("เพิ่มงบ TikTok Ads อีก 20%");
+  if (adSeg) {
     proposals.push({
       id: uid("prp"),
       meeting_id: meetingId,
       kind: "status_change",
-      resolution_id: R.c,
-      proposed_status: "done",
-      title: "เสนอปิดมติ 5/2569 ข้อ 4.3 (แต่งตั้งคณะทำงานงบประมาณ)",
-      evidence_text: closeSeg.text,
-      evidence_start_ms: closeSeg.start_ms,
-      segment_id: closeSeg.id,
-      confidence: 0.91,
-      decision: "pending",
-    });
-  }
-
-  /* 2) มีการรายงานความคืบหน้าของมติ B → เสนอเปลี่ยนเป็นกำลังดำเนินการ */
-  const progressSeg = find("ผู้รับจ้างเพิ่งส่งมอบโมดูลที่เหลือ");
-  if (progressSeg) {
-    proposals.push({
-      id: uid("prp"),
-      meeting_id: meetingId,
-      kind: "status_change",
-      resolution_id: R.b,
+      resolution_id: R.adBudget,
       proposed_status: "in_progress",
-      title: "เสนอเปลี่ยนสถานะมติ 2/2569 ข้อ 4.2 จาก ติดปัญหา → กำลังดำเนินการ",
-      evidence_text: progressSeg.text,
-      evidence_start_ms: progressSeg.start_ms,
-      segment_id: progressSeg.id,
-      confidence: 0.84,
+      title: "อนุมัติเพิ่มงบประมาณ TikTok Ads 20% สำหรับแคมเปญสัปดาห์ถัดไป",
+      evidence_text: adSeg.text,
+      evidence_start_ms: adSeg.start_ms,
+      segment_id: adSeg.id,
+      confidence: 0.95,
       decision: "pending",
     });
   }
 
-  /* 3) มติใหม่ */
-  const newSeg = find("จัดอบรมการใช้งานระบบสารบรรณ");
-  if (newSeg) {
+  /* 2) Action item ใหม่: ปล่อย Hotfix บน iOS */
+  const hotfixSeg = find("ปล่อย Hotfix ภายใน 22:00 น.");
+  if (hotfixSeg) {
     proposals.push({
       id: uid("prp"),
       meeting_id: meetingId,
       kind: "new_resolution",
       resolution_id: null,
-      title:
-        "ให้ฝ่ายเทคโนโลยีสารสนเทศร่วมกับฝ่ายบริหารงานทั่วไป จัดอบรมการใช้งานระบบสารบรรณอิเล็กทรอนิกส์ให้เจ้าหน้าที่ทุกฝ่าย ไม่น้อยกว่า 2 รุ่น ให้แล้วเสร็จภายในวันที่ 30 กันยายน 2569",
-      evidence_text: newSeg.text,
-      evidence_start_ms: newSeg.start_ms,
-      segment_id: newSeg.id,
-      confidence: 0.93,
-      decision: "pending",
-    });
-  }
-  const newSeg2 = find("รายงานผลการใช้จ่ายงบประมาณไตรมาสที่ 4");
-  if (newSeg2) {
-    proposals.push({
-      id: uid("prp"),
-      meeting_id: meetingId,
-      kind: "new_resolution",
-      resolution_id: null,
-      title:
-        "ให้ฝ่ายการเงินและบัญชีจัดทำรายงานผลการใช้จ่ายงบประมาณไตรมาสที่ 4 เสนอที่ประชุมในการประชุมครั้งถัดไป",
-      evidence_text: newSeg2.text,
-      evidence_start_ms: newSeg2.start_ms,
-      segment_id: newSeg2.id,
-      confidence: 0.71,
+      title: "มอบหมายให้กานต์ (Lead Engineer) ปล่อย Hotfix แก้ไขปัญหา Push Notification บนระบบ iOS ภายใน 22:00 น. คืนนี้",
+      evidence_text: hotfixSeg.text,
+      evidence_start_ms: hotfixSeg.start_ms,
+      segment_id: hotfixSeg.id,
+      confidence: 0.97,
       decision: "pending",
     });
   }
@@ -606,8 +618,7 @@ function runExtraction(meetingId: Uuid) {
 
   /* บันทึกการอ้างถึง (referenced) ทุกมติที่ถูกพูดถึงในครั้งนี้ */
   const referenced = [
-    { rid: R.c, seg: closeSeg },
-    { rid: R.b, seg: progressSeg },
+    { rid: R.adBudget, seg: adSeg },
   ].filter((x) => x.seg);
 
   mutate((db2) => ({
@@ -912,7 +923,7 @@ export function decideProposal(
       text: overrides.text ?? proposal.title,
       category: "other",
       status: "proposed",
-      proposer_person_id: P.chair,
+      proposer_person_id: P.phat,
       assignee_ids: overrides.assignee_ids ?? [],
       due_date: overrides.due_date ?? null,
       original_due_date: overrides.due_date ?? null,

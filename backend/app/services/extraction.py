@@ -12,6 +12,7 @@ from datetime import date
 
 from app.core.config import settings
 from app.services.llm import LlmError, chat_json
+from app.services.templates import MeetingTemplateType, get_template
 
 # ── Global Variables & Constants ─────────────────────────────────────────────
 
@@ -23,43 +24,7 @@ SAFETY_MARGIN_TOKENS = 1000
 MIN_CHUNK_TOKENS = 2000
 TARGET_CHUNK_TOKENS = 3500
 
-SYSTEM_PROMPT = """คุณคือผู้ช่วยเลขานุการที่ประชุมราชการ มีหน้าที่สรุปสาระสำคัญและสกัดมติจากการประชุม
-
-ภารกิจ:
-1. สรุปสาระสำคัญ (summary): สรุปภาพรวมและประเด็นหารือหลักในภาษาราชการกระชับ รวมเรื่องเดียวกัน ตัดข้อความซ้ำซ้อนออก (ห้ามระบุวันที่ วันเวลา หรือวันเดือนปีที่จัดประชุมลงในเนื้อหาสรุป)
-2. ประเด็นสำคัญ (key_points): หัวข้อสรุปสั้นๆ 2-5 ข้อ (ไม่ต้องระบุวันที่)
-3. สกัดมติใหม่ (new_resolutions): สกัดเฉพาะข้อตกลง การอนุมัติ หรือการมอบหมายงานที่มีผลชัดเจน (ถ้าไม่พบมติ ให้ใส่ [])
-   - category: procurement | policy | personnel | budget | operations | other
-   - confidence: 0.0 - 1.0 (เช่น 0.95)
-   - segment_index: index ของท่อนคำพูดที่เกิดมติ
-   - due_date: วันครบกำหนด YYYY-MM-DD หรือ null
-4. ตรวจสอบมติค้างเดิม (updates): ติดตามมติค้างที่ระบุในบริบท (ถ้ามี)
-   - proposed_status: in_progress | blocked | done
-   - evidence: ข้อความหลักฐานที่พูดในที่ประชุม
-
-ข้อพึงระวัง:
-- ในส่วนสรุปสาระสำคัญ (summary) และประเด็นสำคัญ (key_points) ห้ามระบุวันที่หรือวันเวลาที่จัดการประชุม ให้เน้นเฉพาะเนื้อหาสาระสำคัญของการหารือเท่านั้น
-
-ตอบกลับเป็น JSON เท่านั้น:
-{
-  "summary": "ข้อความสรุปสาระสำคัญของการประชุมในภาษาราชการ...",
-  "key_points": [
-    "ประเด็นสำคัญที่ 1",
-    "ประเด็นสำคัญที่ 2"
-  ],
-  "new_resolutions": [
-    {
-      "text": "ข้อความมติเต็มในภาษาราชการ",
-      "assignee_mention": "ฝ่าย/หน่วยงานที่รับผิดชอบ หรือ 'ไม่ระบุ'",
-      "category": "operations",
-      "confidence": 0.95,
-      "segment_index": 0,
-      "due_date": null
-    }
-  ],
-  "updates": [],
-  "speakers": []
-}"""
+SYSTEM_PROMPT = get_template(MeetingTemplateType.GENERAL)["system_prompt"]
 
 
 # ── Classes & Dataclasses ────────────────────────────────────────────────────
@@ -119,6 +84,8 @@ class ExtractionResult:
     new_resolutions: list[NewResolution] = field(default_factory=list)
     updates: list[ResolutionUpdate] = field(default_factory=list)
     speakers: list[SpeakerMention] = field(default_factory=list)
+    template_applied: str = "general"
+    raw_data: dict = field(default_factory=dict)
 
 
 # ── Functions ────────────────────────────────────────────────────────────────
@@ -127,12 +94,17 @@ def extract(
     segments: list[SegmentView],
     open_resolutions: list[OpenResolutionView] | None = None,
     meeting_label: str = "",
+    template: MeetingTemplateType | str = MeetingTemplateType.GENERAL,
 ) -> ExtractionResult:
     """
-    สรุปเนื้อหา ASR และสกัดมติที่เกิดขึ้นจากการประชุมแบบ Concurrent Chunks (Single Prompt)
+    สรุปเนื้อหา ASR และสกัดมติที่เกิดขึ้นจากการประชุมตาม Template (Concurrent Chunks)
     """
     if not segments:
         return ExtractionResult()
+
+    tmpl_def = get_template(template)
+    system_prompt = tmpl_def["system_prompt"]
+    template_id = tmpl_def["id"]
 
     context = _build_context(open_resolutions)
     max_index = len(segments) - 1
@@ -147,7 +119,7 @@ def extract(
             f"=== บันทึกคำต่อคำของการประชุม (ช่วงที่ {idx}/{len(chunks)}) ===\n{transcript}"
         )
         try:
-            data = chat_json(SYSTEM_PROMPT, user, temperature=0.1)
+            data = chat_json(system_prompt, user, temperature=0.1)
             return idx, data
         except LlmError:
             logger.exception("สกัดมติไม่สำเร็จที่ช่วง %s/%s", idx, len(chunks))
@@ -161,7 +133,7 @@ def extract(
             chunk_results = [f.result() for f in futures]
             chunk_results.sort(key=lambda x: x[0])
 
-    merged = ExtractionResult()
+    merged = ExtractionResult(template_applied=template_id)
     latest_updates: dict[str, ResolutionUpdate] = {}
     valid_refs = {r.ref for r in open_resolutions} if open_resolutions else set()
 
@@ -175,6 +147,13 @@ def extract(
         merged.key_points.extend(partial.key_points)
         merged.new_resolutions.extend(partial.new_resolutions)
         merged.speakers.extend(partial.speakers)
+        # ผสาน raw_data สำหรับ domain templates
+        for k, v in (partial.raw_data or {}).items():
+            if k not in merged.raw_data:
+                merged.raw_data[k] = v
+            elif isinstance(v, list) and isinstance(merged.raw_data[k], list):
+                merged.raw_data[k].extend(v)
+
         for update in partial.updates:
             latest_updates[update.ref] = update
 
@@ -235,6 +214,7 @@ def _chunk_segments(segments: list[SegmentView], budget_tokens: int) -> list[lis
 def _to_result(data: dict, valid_refs: set[str] | None = None, max_index: int = 0) -> ExtractionResult:
     valid_refs_set = valid_refs or set()
     result = ExtractionResult()
+    result.raw_data = {k: v for k, v in data.items() if k not in ("speakers", "updates")}
     result.summary = _clean(data.get("summary"))
 
     raw_points = data.get("key_points")
@@ -244,6 +224,7 @@ def _to_result(data: dict, valid_refs: set[str] | None = None, max_index: int = 
         if not result.summary:
             result.summary = " ".join(points)
 
+    # 1. new_resolutions ปกติ
     for item in _as_list(data.get("new_resolutions")):
         text = _clean(item.get("text"))
         if not text:
@@ -258,6 +239,34 @@ def _to_result(data: dict, valid_refs: set[str] | None = None, max_index: int = 
                 confidence=_confidence(item.get("confidence") if item.get("confidence") is not None else 0.85),
             )
         )
+
+    # 2. Map decisions / action_items / action_plan / in_progress สำหรับ domain templates
+    if not result.new_resolutions:
+        # decisions
+        for item in _as_list(data.get("decisions")):
+            text = _clean(item.get("text"))
+            if text:
+                result.new_resolutions.append(
+                    NewResolution(
+                        text=text,
+                        category=_clean(item.get("category")) or "operations",
+                        assignee_mention=_clean(item.get("assigned_speaker") or item.get("assignee")),
+                        confidence=_confidence(item.get("confidence") if item.get("confidence") is not None else 0.95),
+                    )
+                )
+        # action_items / action_plan
+        for item in _as_list(data.get("action_items") or data.get("action_plan")):
+            task = _clean(item.get("task") or item.get("text"))
+            if task:
+                result.new_resolutions.append(
+                    NewResolution(
+                        text=task,
+                        category="operations",
+                        assignee_mention=_clean(item.get("assigned_speaker") or item.get("speaker") or item.get("assignee")),
+                        due_date=_date(item.get("deadline") or item.get("due_date")),
+                        confidence=0.9,
+                    )
+                )
 
     for item in _as_list(data.get("updates")):
         ref = _clean(item.get("ref"))
@@ -280,8 +289,8 @@ def _to_result(data: dict, valid_refs: set[str] | None = None, max_index: int = 
         )
 
     for item in _as_list(data.get("speakers")):
-        label = _clean(item.get("speaker_label"))
-        mention = _clean(item.get("name_mention"))
+        label = _clean(item.get("speaker_label") or item.get("speaker"))
+        mention = _clean(item.get("name_mention") or item.get("name"))
         if not label or not mention:
             continue
         result.speakers.append(

@@ -1,11 +1,12 @@
 """
-ข้อมูลตั้งต้นสำหรับเดโม — ตรงกับสคริปต์ใน §11 และกับ frontend/lib/seed.ts
+ข้อมูลตั้งต้นสำหรับเดโม — Persona: NovaTech Studio & SaaS (High-Growth Product Agency)
+ตรงกับข้อกำหนดใน Mock_Data_Update.md และ frontend/lib/seed.ts
 
     python -m app.seed          สร้างข้อมูลถ้ายังไม่มี
     python -m app.seed --reset  ล้างของเดิมแล้วสร้างใหม่
 
-ครั้งที่ 5/2569 (รับรองแล้ว) มีมติ A จัดซื้อครุภัณฑ์ (เกินกำหนด) · B ระบบสารบรรณ (เลื่อน 3 ครั้ง)
-· C คณะทำงานงบประมาณ (จะถูกปิดเมื่ออัปโหลดครั้งที่ 6)
+Collection: Alpha App Q3 Launch Campaign (col-app-launch-2026)
+Team: ภัทร (Phat), ริน (Rin), กานต์ (Karn), มิ้น (Mint)
 """
 
 from __future__ import annotations
@@ -47,11 +48,11 @@ DONE_PIPELINE = [
     {"stage": "done", "state": "ok", "detail": "พร้อมให้ตรวจทาน"},
 ]
 
-SECRETARY = "นางสาวปรียานุช วัฒนสิน"
+LEAD_ACTOR = "ภัทร (Phat)"
 
 
 async def seed(session: AsyncSession) -> None:
-    org = Organization(name="สำนักงานพัฒนาระบบราชการ (ตัวอย่าง)")
+    org = Organization(name="NovaTech Studio (Demo Workspace)")
     session.add(org)
     await session.flush()
 
@@ -69,111 +70,104 @@ async def seed(session: AsyncSession) -> None:
         return row
 
     # ── หน่วยงาน / ฝ่าย (Department Entities) ───────────────────────────
-    dept_directorate = person("สำนักผู้อำนวยการ", "หน่วยงาน", "สำนักผู้อำนวยการ", "test01@gmail.com", True)
-    dept_admin = person("ฝ่ายบริหารงานทั่วไป", "หน่วยงาน", "ฝ่ายบริหารงานทั่วไป", "test01@gmail.com", True)
-    dept_it = person("ฝ่ายเทคโนโลยีสารสนเทศ", "หน่วยงาน", "ฝ่ายเทคโนโลยีสารสนเทศ", "test02@gmail.com", True)
-    dept_supply = person("ฝ่ายพัสดุ", "หน่วยงาน", "ฝ่ายพัสดุ", "test01@gmail.com", True)
-    dept_finance = person("ฝ่ายการเงินและบัญชี", "หน่วยงาน", "ฝ่ายการเงินและบัญชี", "test02@gmail.com", True)
-    dept_academic = person("ฝ่ายวิชาการ", "หน่วยงาน", "ฝ่ายวิชาการ", "test01@gmail.com", True)
+    dept_product = person("ทีมบริหารผลิตภัณฑ์ (Product Team)", "ทีมงาน", "Product & Strategy", "product@novatech.io", True)
+    dept_eng = person("ทีมพัฒนาและวิศวกรรม (Engineering Team)", "ทีมงาน", "Engineering", "dev@novatech.io", True)
+    dept_design = person("ทีมออกแบบและประสบการณ์ผู้ใช้ (Design Team)", "ทีมงาน", "Design & UX", "design@novatech.io", True)
+    dept_growth = person("ทีมการตลาดและการเติบโต (Growth Team)", "ทีมงาน", "Growth & Marketing", "growth@novatech.io", True)
 
-    # ── บุคลากรในแต่ละฝ่าย (Members per Department) ─────────────────────
-    chair = person("นายธนกฤต อารีวงศ์", "ผู้อำนวยการ (ประธานที่ประชุม)", "สำนักผู้อำนวยการ", "test01@gmail.com")
-    deputy = person("นายสุรชัย ทองอินทร์", "รองผู้อำนวยการ", "สำนักผู้อำนวยการ", "test02@gmail.com")
-    secretary = person(SECRETARY, "หัวหน้าฝ่ายบริหารงานทั่วไป (เลขานุการที่ประชุม)", "ฝ่ายบริหารงานทั่วไป", "test01@gmail.com")
-    admin_officer = person("นายณัฐวุฒิ สิทธิชัย", "เจ้าหน้าที่บริหารงานทั่วไปปฏิบัติการ", "ฝ่ายบริหารงานทั่วไป", "test02@gmail.com")
-    it = person("นายวีระพงษ์ ศรีสมบูรณ์", "หัวหน้าฝ่ายเทคโนโลยีสารสนเทศ", "ฝ่ายเทคโนโลยีสารสนเทศ", "test02@gmail.com")
-    it_officer = person("นายชานนท์ วงศ์สุวรรณ", "นักวิชาการคอมพิวเตอร์ชำนาญการ", "ฝ่ายเทคโนโลยีสารสนเทศ", "test01@gmail.com")
-    supply = person("นางกาญจนา พูลสวัสดิ์", "หัวหน้าฝ่ายพัสดุ", "ฝ่ายพัสดุ", "test01@gmail.com")
-    supply_officer = person("นายเอกชัย ภักดี", "เจ้าหน้าที่พัสดุชำนาญการ", "ฝ่ายพัสดุ", "test02@gmail.com")
-    finance = person("นางสาวศิริพร เจริญผล", "หัวหน้าฝ่ายการเงินและบัญชี", "ฝ่ายการเงินและบัญชี", "test02@gmail.com")
-    finance_officer = person("นางสาวกมลวรรณ สุขสม", "นักวิชาการเงินและบัญชีปฏิบัติการ", "ฝ่ายการเงินและบัญชี", "test01@gmail.com")
-    academic = person("นายกิตติศักดิ์ แสนสุข", "หัวหน้าฝ่ายวิชาการ", "ฝ่ายวิชาการ", "test01@gmail.com")
-    academic_officer = person("นางสาวนภัสสร รุ่งเรือง", "นักวิชาการแผนและนโยบายชำนาญการ", "ฝ่ายวิชาการ", "test02@gmail.com")
+    # ── บุคลากรหลักในทีม (NovaTech Studio Core Members) ─────────────────
+    phat = person("ภัทร (Phat)", "Head of Product / Founder", "Product & Strategy", "phat@novatech.io")
+    rin = person("ริน (Rin)", "Lead Product Designer / Scrum Lead", "Design & UX", "rin@novatech.io")
+    karn = person("กานต์ (Karn)", "Lead Software Engineer", "Engineering", "karn@novatech.io")
+    mint = person("มิ้น (Mint)", "Growth & Marketing Lead", "Growth & Marketing", "mint@novatech.io")
     await session.flush()
 
+    # ── ฉายาและชื่อเรียก (Aliases) ──────────────────────────────────────
     for person_row, alias, source, confidence in [
-        (deputy, "พี่หนึ่ง", "confirmed_extraction", 0.94),
-        (deputy, "ท่านรอง", "manual", 1.0),
-        (secretary, "พี่แนน", "confirmed_extraction", 0.88),
-        (it, "ผอ.ไอที", "manual", 1.0),
-        (supply, "พี่กาญ", "confirmed_extraction", 0.91),
-        (chair, "ท่านประธาน", "manual", 1.0),
-        (dept_supply, "พัสดุ", "manual", 1.0),
+        (phat, "ภัทร", "confirmed_extraction", 0.98),
+        (phat, "Product Lead", "manual", 1.0),
+        (phat, "ท่านประธาน", "manual", 1.0),
+        (rin, "ริน", "confirmed_extraction", 0.96),
+        (rin, "Scrum Lead", "manual", 1.0),
+        (rin, "Designer", "manual", 1.0),
+        (karn, "กานต์", "confirmed_extraction", 0.97),
+        (karn, "Tech Lead", "manual", 1.0),
+        (karn, "Lead Dev", "manual", 1.0),
+        (mint, "มิ้น", "confirmed_extraction", 0.95),
+        (mint, "Marketing Lead", "manual", 1.0),
+        (mint, "Growth", "manual", 1.0),
+        (dept_eng, "ทีม Dev", "manual", 1.0),
+        (dept_growth, "ทีมการตลาด", "manual", 1.0),
     ]:
         session.add(
             PersonAlias(person_id=person_row.id, alias=alias, source=source, confidence=confidence)
         )
 
-    # ── ชุดการประชุม ────────────────────────────────────────────────────
-    exec_series = MeetingSeries(
+    # ── คอลเลกชัน / ชุดการประชุม (Workspace Collections) ────────────────
+    launch_series = MeetingSeries(
         org_id=org.id,
-        name="คณะกรรมการบริหาร ปีงบประมาณ 2569",
-        committee_type="คณะกรรมการบริหาร",
-        fiscal_year=2569,
-        cadence="monthly",
+        name="Alpha App Q3 Launch Campaign",
+        committee_type="Product Launch & Growth",
+        fiscal_year=2026,
+        cadence="weekly",
+        next_meeting_date=date(2026, 8, 14),
+        member_ids=[str(p.id) for p in (phat, rin, karn, mint)],
+    )
+    tech_series = MeetingSeries(
+        org_id=org.id,
+        name="Core Backend & AI Microservices",
+        committee_type="Engineering & Tech Standup",
+        fiscal_year=2026,
+        cadence="bi-weekly",
         next_meeting_date=date(2026, 8, 20),
-        member_ids=[str(p.id) for p in (chair, deputy, secretary, it, supply, finance, academic)],
+        member_ids=[str(p.id) for p in (phat, karn, rin)],
     )
-    academic_series = MeetingSeries(
-        org_id=org.id,
-        name="คณะกรรมการวิชาการ ปีงบประมาณ 2569",
-        committee_type="คณะกรรมการวิชาการ",
-        fiscal_year=2569,
-        cadence="quarterly",
-        next_meeting_date=date(2026, 9, 10),
-        member_ids=[str(p.id) for p in (chair, academic, secretary)],
-    )
-    session.add_all([exec_series, academic_series])
+    session.add_all([launch_series, tech_series])
     await session.flush()
 
-    # ── การประชุม ───────────────────────────────────────────────────────
-    def meeting(series, seq, day: date) -> Meeting:
+    # ── การประชุม (Meeting Sessions) ────────────────────────────────────
+    def meeting(series, seq, day: date, title: str) -> Meeting:
         row = Meeting(
             series_id=series.id,
             sequence_no=seq,
-            fiscal_year=2569,
+            fiscal_year=2026,
             meeting_date=day,
-            title=f"การประชุมครั้งที่ {seq}/2569",
+            title=title,
             audio_uri=None,
             source_kind="audio",
             status=MeetingStatus.DISTRIBUTED,
             pipeline=[dict(s) for s in DONE_PIPELINE],
-            approved_at=datetime(day.year, day.month, day.day, 16, 20),
-            approved_by=SECRETARY,
+            approved_at=datetime(day.year, day.month, day.day, 11, 30),
+            approved_by=LEAD_ACTOR,
         )
         session.add(row)
         return row
 
-    m1 = meeting(exec_series, 1, date(2026, 1, 22))
-    m2 = meeting(exec_series, 2, date(2026, 3, 12))
-    m3 = meeting(exec_series, 3, date(2026, 4, 23))
-    m4 = meeting(exec_series, 4, date(2026, 5, 21))
-    m5 = meeting(exec_series, 5, date(2026, 6, 18))
-    meeting(academic_series, 1, date(2026, 2, 5))
+    m1 = meeting(launch_series, 1, date(2026, 7, 10), "Kickoff: Scope & Budget Allocation")
+    m2 = meeting(launch_series, 2, date(2026, 7, 24), "Sprint Review: Beta Readiness & Ad Visuals")
+    m3 = meeting(launch_series, 3, date(2026, 8, 7), "Pre-Launch Sync: Blocker Clearance & Pricing")
+    meeting(tech_series, 1, date(2026, 7, 15), "Sprint 14: AI Gateway & Rate Limiting")
     await session.flush()
 
-    # ── บันทึกคำต่อคำของครั้งที่ 5 ──────────────────────────────────────
+    # ── บันทึกคำต่อคำของการประชุม Pre-Launch Sync (Meeting #3) ───────────
     script = [
-        ("SPEAKER_00", chair, 12_000, "เรียนคณะกรรมการทุกท่าน วันนี้เป็นการประชุมครั้งที่ 5 ประจำปีงบประมาณ 2569 ขอเปิดการประชุมครับ", 0.95),
-        ("SPEAKER_02", secretary, 96_000, "วาระที่ 2 ขอให้ที่ประชุมพิจารณารับรองรายงานการประชุมครั้งที่ 4/2569 ค่ะ", 0.95),
-        ("SPEAKER_00", chair, 141_000, "ถ้าไม่มีการแก้ไข ถือว่าที่ประชุมรับรองรายงานการประชุมครั้งที่ 4 นะครับ", 0.95),
-        ("SPEAKER_03", supply, 620_000, "เรื่องครุภัณฑ์คอมพิวเตอร์ที่จะทดแทนของเดิม ตอนนี้ฝ่ายพัสดุประเมินไว้ 42 เครื่อง กรอบวงเงินประมาณ 1.26 ล้านบาทค่ะ", 0.94),
-        ("SPEAKER_00", chair, 688_000, "งั้นที่ประชุมมีมติมอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน หรือ TOR สำหรับการจัดซื้อครุภัณฑ์คอมพิวเตอร์ทดแทน จำนวน 42 เครื่อง ให้แล้วเสร็จภายใน 30 วัน แล้วเสนอที่ประชุมพิจารณาครับ", 0.97),
-        ("SPEAKER_01", it, 1_040_000, "เรื่องระบบสารบรรณอิเล็กทรอนิกส์ ต้องขออภัยที่ประชุม ผู้รับจ้างส่งมอบโมดูลไม่ครบ ทำให้ยังทดสอบระบบไม่ได้ครับ", 0.93),
-        ("SPEAKER_00", chair, 1_112_000, "อันนี้เลื่อนมาสามรอบแล้วนะครับ ที่ประชุมขอให้ฝ่ายเทคโนโลยีสารสนเทศเร่งรัดผู้รับจ้าง และรายงานความคืบหน้าเป็นลายลักษณ์อักษรภายในวันที่ 31 สิงหาคม 2569", 0.95),
-        ("SPEAKER_02", secretary, 1_530_000, "วาระที่ 4.3 เรื่องการจัดทำคำของบประมาณประจำปี 2570 ค่ะ ต้องเริ่มภายในเดือนกรกฎาคม", 0.94),
-        ("SPEAKER_00", chair, 1_588_000, "ขอให้พี่หนึ่งรับไปดูแลนะครับ ที่ประชุมมีมติให้แต่งตั้งคณะทำงานจัดทำคำของบประมาณประจำปี 2570 โดยมอบหมายรองผู้อำนวยการเป็นประธานคณะทำงาน ให้แล้วเสร็จภายในวันที่ 31 กรกฎาคม 2569", 0.96),
-        ("SPEAKER_04", deputy, 1_664_000, "รับทราบครับ ผมจะประสานฝ่ายการเงินเรื่องกรอบวงเงินก่อนครับ", 0.93),
-        ("SPEAKER_00", chair, 2_402_000, "ไม่มีเรื่องอื่นแล้วนะครับ ปิดประชุมครับ", 0.96),
+        ("SPEAKER_01", phat, 12_000, "สวัสดีทุกคน วันนี้มาเช็คความพร้อมก่อนเปิด Beta สัปดาห์หน้า เรื่องแรก Payment Gateway ที่ติดสัปดาห์ที่แล้วเป็นยังไงบ้าง กานต์?", 0.98),
+        ("SPEAKER_03", karn, 24_000, "แก้เรียบร้อยแล้วครับ ผู้ให้บริการปลดล็อก Production Key ให้แล้ว เมื่อวานทีมเทสระบบตัดบัตรเครดิตและ PromptPay ผ่านฉลุย ไม่มีปัญหาแล้วครับ", 0.98),
+        ("SPEAKER_01", phat, 70_000, "ยอดเยี่ยมมาก ถือว่า Blocker ตัวนี้เคลียร์แล้วนะ ถัดมาเรื่องแคมเปญการตลาด มิ้น เตรียม Key Visual ทันไหม?", 0.97),
+        ("SPEAKER_04", mint, 95_000, "สำหรับ Key Visual ชุดแรกพร้อมยิง Ads บน TikTok และ Meta วันจันทร์นี้ค่ะ แต่มีเรื่องขออนุมัติงบเพิ่ม 50,000 บาท สำหรับจ้าง Tech Influencer 2 ช่อง มารีวิวช่วง Early Access ค่ะ", 0.95),
+        ("SPEAKER_01", phat, 135_000, "งบรวม 500,000 บาทเดิมยังเหลือไหม? ถ้ายังอยู่ใน Cap 5 แสน เกลี่ยจากงบ Google Search Ads มาได้เลย ผมอนุมัติ", 0.97),
+        ("SPEAKER_04", mint, 160_000, "โอเคค่ะ งั้นสรุปเกลี่ยงบ 50,000 บาทมาจ่าย Influencer โดยคุมยอดรวมไม่เกิน 500k บาท และจะส่งรายงาน Conversion ให้ดูทุกเย็นวันศุกร์ค่ะ", 0.96),
+        ("SPEAKER_02", rin, 195_000, "หน้า Landing Page สมัคร Early Access ทำเสร็จแล้วนะคะ พร้อมเปิดให้ลงทะเบียนศุกร์นี้ที่ราคา 299 บาท/เดือน ตามมติใหม่", 0.97),
+        ("SPEAKER_01", phat, 245_000, "ดีมาก สรุป Action Item: มิ้นยิง Ads วันจันทร์, รินเปิดหน้าเว็บวันศุกร์, กานต์สแตนด์บาย Monitor Server ปิดประชุมครับ", 0.98),
     ]
     segments: dict[int, TranscriptSegment] = {}
     for label, who, start, text, confidence in script:
         row = TranscriptSegment(
-            meeting_id=m5.id,
+            meeting_id=m3.id,
             speaker_label=label,
             person_id=who.id,
             start_ms=start,
-            end_ms=start + max(5000, len(text) * 130),
+            end_ms=start + max(4000, len(text) * 120),
             text=text,
             confidence=confidence,
         )
@@ -181,139 +175,64 @@ async def seed(session: AsyncSession) -> None:
         segments[start] = row
     await session.flush()
 
-    # ── มติ ─────────────────────────────────────────────────────────────
+    # ── ข้อสรุปและมติการดำเนินงาน (Resolutions & Action Items) ─────────
     def resolution(**kwargs) -> Resolution:
-        row = Resolution(series_id=exec_series.id, **kwargs)
+        row = Resolution(series_id=launch_series.id, **kwargs)
         session.add(row)
         return row
 
-    res_a = resolution(
-        ref_no="มติ 5/2569 ข้อ 4.1",
-        origin_meeting_id=m5.id,
-        origin_segment_id=segments[688_000].id,
-        origin_agenda_item="วาระที่ 4.1",
-        text="มอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน (TOR) สำหรับการจัดซื้อครุภัณฑ์คอมพิวเตอร์ทดแทน จำนวน 42 เครื่อง กรอบวงเงิน 1,260,000 บาท ให้แล้วเสร็จภายใน 30 วัน และเสนอที่ประชุมพิจารณา",
-        category="procurement",
-        status=ResolutionStatus.CONFIRMED,
-        proposer_person_id=chair.id,
-        due_date=date(2026, 7, 18),
-        original_due_date=date(2026, 7, 18),
-        extraction_confidence=0.97,
-        created_at=datetime(2026, 6, 18, 14, 0),
-    )
-    res_b = resolution(
-        ref_no="มติ 2/2569 ข้อ 4.2",
-        origin_meeting_id=m2.id,
-        origin_agenda_item="วาระที่ 4.2",
-        text="ให้ฝ่ายเทคโนโลยีสารสนเทศเร่งรัดผู้รับจ้างให้ส่งมอบและติดตั้งระบบสารบรรณอิเล็กทรอนิกส์ให้ครบทุกโมดูล พร้อมรายงานความคืบหน้าเป็นลายลักษณ์อักษรต่อที่ประชุม",
+    res_payment = resolution(
+        ref_no="Action #1 (Tech Architecture)",
+        origin_meeting_id=m1.id,
+        origin_segment_id=segments[24_000].id,
+        origin_agenda_item="วาระที่ 1 (Infrastructure)",
+        text="เชื่อมต่อและทดสอบ Payment Gateway ทั้งระบบบัตรเครดิตและ PromptPay ให้พร้อมรับชำระเงินจริงในรอบ Beta Launch",
         category="operations",
-        status=ResolutionStatus.BLOCKED,
-        proposer_person_id=chair.id,
-        due_date=date(2026, 8, 31),
-        original_due_date=date(2026, 3, 31),
-        postpone_count=3,
-        extraction_confidence=0.93,
-        created_at=datetime(2026, 3, 12, 14, 0),
+        status=ResolutionStatus.DONE,
+        proposer_person_id=phat.id,
+        due_date=date(2026, 8, 5),
+        original_due_date=date(2026, 7, 28),
+        postpone_count=1,
+        closed_meeting_id=m3.id,
+        closed_at=datetime(2026, 8, 7, 10, 30),
+        extraction_confidence=0.98,
     )
-    res_c = resolution(
-        ref_no="มติ 5/2569 ข้อ 4.3",
-        origin_meeting_id=m5.id,
-        origin_segment_id=segments[1_588_000].id,
-        origin_agenda_item="วาระที่ 4.3",
-        text="ให้แต่งตั้งคณะทำงานจัดทำคำของบประมาณประจำปีงบประมาณ 2570 โดยมอบหมายรองผู้อำนวยการเป็นประธานคณะทำงาน ให้แล้วเสร็จภายในวันที่ 31 กรกฎาคม 2569",
+    res_ad_budget = resolution(
+        ref_no="Action #2 (Growth & Marketing)",
+        origin_meeting_id=m3.id,
+        origin_segment_id=segments[160_000].id,
+        origin_agenda_item="วาระที่ 2 (Marketing Launch)",
+        text="คุมงบยิงโฆษณา Alpha Launch รวมไม่เกิน 500,000 บาท โดยเกลี่ยงบ 50,000 บาทสำหรับ Tech Influencer 2 ช่อง และส่งรายงาน Conversion ทุกวันศุกร์",
         category="budget",
         status=ResolutionStatus.IN_PROGRESS,
-        proposer_person_id=chair.id,
-        due_date=date(2026, 7, 31),
-        original_due_date=date(2026, 7, 31),
+        proposer_person_id=phat.id,
+        due_date=date(2026, 8, 31),
+        original_due_date=date(2026, 8, 31),
+        postpone_count=0,
         extraction_confidence=0.96,
-        created_at=datetime(2026, 6, 18, 14, 0),
     )
-    res_d = resolution(
-        ref_no="มติ 1/2569 ข้อ 4.1", origin_meeting_id=m1.id,
-        text="ให้ทุกฝ่ายจัดทำแผนปฏิบัติการประจำปีงบประมาณ 2569 ส่งฝ่ายบริหารงานทั่วไปภายในวันที่ 15 กุมภาพันธ์ 2569",
-        category="policy", status=ResolutionStatus.DONE, proposer_person_id=chair.id,
-        due_date=date(2026, 2, 15), original_due_date=date(2026, 2, 15),
-        closed_meeting_id=m2.id, closed_at=datetime(2026, 3, 12, 15, 0),
-        created_at=datetime(2026, 1, 22, 14, 0),
-    )
-    res_e = resolution(
-        ref_no="มติ 2/2569 ข้อ 4.1", origin_meeting_id=m2.id,
-        text="อนุมัติปรับปรุงห้องประชุมใหญ่ ชั้น 3 วงเงินไม่เกิน 480,000 บาท โดยให้ฝ่ายพัสดุดำเนินการตามระเบียบพัสดุ",
-        category="budget", status=ResolutionStatus.DONE, proposer_person_id=chair.id,
-        due_date=date(2026, 5, 31), original_due_date=date(2026, 4, 30), postpone_count=1,
-        closed_meeting_id=m5.id, closed_at=datetime(2026, 6, 18, 15, 30),
-        created_at=datetime(2026, 3, 12, 14, 20),
-    )
-    res_f = resolution(
-        ref_no="มติ 3/2569 ข้อ 4.1", origin_meeting_id=m3.id,
-        text="ให้ฝ่ายการเงินและบัญชีรายงานผลการใช้จ่ายงบประมาณรายไตรมาสต่อที่ประชุมทุกครั้ง",
-        category="budget", status=ResolutionStatus.DONE, proposer_person_id=chair.id,
-        due_date=date(2026, 5, 15), original_due_date=date(2026, 5, 15),
-        closed_meeting_id=m4.id, closed_at=datetime(2026, 5, 21, 15, 0),
-        created_at=datetime(2026, 4, 23, 14, 10),
-    )
-    res_g = resolution(
-        ref_no="มติ 3/2569 ข้อ 4.2", origin_meeting_id=m3.id,
-        text="ให้ฝ่ายวิชาการจัดทำหลักสูตรอบรมภายในสำหรับเจ้าหน้าที่ใหม่ ปีละไม่น้อยกว่า 2 รุ่น",
-        category="operations", status=ResolutionStatus.DONE, proposer_person_id=chair.id,
-        due_date=date(2026, 6, 15), original_due_date=date(2026, 6, 15),
-        closed_meeting_id=m5.id, closed_at=datetime(2026, 6, 18, 15, 35),
-        created_at=datetime(2026, 4, 23, 14, 30),
-    )
-    res_h = resolution(
-        ref_no="มติ 4/2569 ข้อ 4.1", origin_meeting_id=m4.id,
-        text="ให้ทบทวนระเบียบการเบิกจ่ายค่าใช้จ่ายในการเดินทางไปราชการ ให้สอดคล้องกับระเบียบกระทรวงการคลังฉบับใหม่",
-        category="policy", status=ResolutionStatus.IN_PROGRESS, proposer_person_id=chair.id,
-        due_date=date(2026, 8, 29), original_due_date=date(2026, 7, 31), postpone_count=1,
-        created_at=datetime(2026, 5, 21, 14, 15),
-    )
-    res_i = resolution(
-        ref_no="มติ 4/2569 ข้อ 4.2", origin_meeting_id=m4.id,
-        text="ให้ฝ่ายเทคโนโลยีสารสนเทศจัดหาระบบสำรองข้อมูลนอกสถานที่ (offsite backup) ภายในไตรมาส 4",
-        category="operations", status=ResolutionStatus.CONFIRMED, proposer_person_id=chair.id,
-        due_date=date(2026, 9, 30), original_due_date=date(2026, 9, 30),
-        created_at=datetime(2026, 5, 21, 14, 40),
-    )
-    res_k = resolution(
-        ref_no="มติ 4/2569 ข้อ 4.3", origin_meeting_id=m4.id,
-        text="ให้จัดซื้อเครื่องปรับอากาศทดแทน จำนวน 12 เครื่อง โดยวิธีประกวดราคาอิเล็กทรอนิกส์ (e-bidding) แทนมติเดิมตามข้อเสนอของฝ่ายพัสดุ",
-        category="procurement", status=ResolutionStatus.DONE, proposer_person_id=chair.id,
-        due_date=date(2026, 6, 30), original_due_date=date(2026, 6, 30),
-        closed_meeting_id=m5.id, closed_at=datetime(2026, 6, 18, 15, 40),
-        created_at=datetime(2026, 5, 21, 15, 0),
-    )
-    await session.flush()
-
-    res_j = resolution(
-        ref_no="มติ 2/2569 ข้อ 4.3", origin_meeting_id=m2.id,
-        text="ให้จัดซื้อเครื่องปรับอากาศทดแทนของเดิม จำนวน 8 เครื่อง โดยวิธีเฉพาะเจาะจง",
-        category="procurement", status=ResolutionStatus.SUPERSEDED, proposer_person_id=chair.id,
-        due_date=date(2026, 5, 31), original_due_date=date(2026, 5, 31),
-        superseded_by_id=res_k.id, created_at=datetime(2026, 3, 12, 14, 50),
-    )
-    res_l = resolution(
-        ref_no="มติ 1/2569 ข้อ 5.1", origin_meeting_id=m1.id,
-        text="ให้จัดกิจกรรมสัมมนาประจำปีนอกสถานที่ในไตรมาส 3",
-        category="operations", status=ResolutionStatus.CANCELLED, proposer_person_id=chair.id,
-        due_date=date(2026, 6, 30), original_due_date=date(2026, 6, 30),
-        created_at=datetime(2026, 1, 22, 15, 0),
+    res_landing_page = resolution(
+        ref_no="Action #3 (Product & Design)",
+        origin_meeting_id=m3.id,
+        origin_segment_id=segments[195_000].id,
+        origin_agenda_item="วาระที่ 3 (Product Delivery)",
+        text="เปิดหน้า Landing Page สำหรับลงทะเบียน Early-bird Subscription ราคาพิเศษ 299 บาท/เดือน ภายในวันศุกร์นี้",
+        category="operations",
+        status=ResolutionStatus.DONE,
+        proposer_person_id=phat.id,
+        due_date=date(2026, 8, 14),
+        original_due_date=date(2026, 8, 14),
+        postpone_count=0,
+        closed_meeting_id=m3.id,
+        closed_at=datetime(2026, 8, 7, 11, 0),
+        extraction_confidence=0.97,
     )
     await session.flush()
 
     for resolution_row, people in [
-        (res_a, [dept_supply, supply]),
-        (res_b, [it, dept_it]),
-        (res_c, [deputy]),
-        (res_d, [secretary]),
-        (res_e, [dept_supply]),
-        (res_f, [finance]),
-        (res_g, [academic]),
-        (res_h, [finance]),
-        (res_i, [it]),
-        (res_j, [dept_supply]),
-        (res_k, [dept_supply]),
-        (res_l, [secretary]),
+        (res_payment, [karn, dept_eng]),
+        (res_ad_budget, [mint, dept_growth]),
+        (res_landing_page, [rin, dept_design]),
     ]:
         for who in people:
             session.add(
@@ -322,16 +241,13 @@ async def seed(session: AsyncSession) -> None:
                 )
             )
 
-    # ── การอ้างถึงข้ามการประชุม ────────────────────────────────────────
+    # ── การเชื่อมโยงข้ามการประชุม (Cross-Meeting Citations & Links) ────
     for resolution_row, meeting_row, link_type, evidence, start_ms, confidence, created in [
-        (res_a, m5, LinkType.CREATED, "ที่ประชุมมีมติมอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน หรือ TOR สำหรับการจัดซื้อครุภัณฑ์คอมพิวเตอร์ทดแทน จำนวน 42 เครื่อง", 688_000, 0.97, datetime(2026, 6, 18, 14, 0)),
-        (res_b, m2, LinkType.CREATED, "ที่ประชุมมีมติให้ฝ่ายเทคโนโลยีสารสนเทศดำเนินการปรับปรุงระบบสารบรรณอิเล็กทรอนิกส์", 1_204_000, 0.94, datetime(2026, 3, 12, 14, 0)),
-        (res_b, m3, LinkType.PROGRESS_REPORTED, "ขณะนี้อยู่ระหว่างรอผู้รับจ้างส่งมอบโมดูลที่ 2 ขอเลื่อนกำหนดเป็นสิ้นเดือนพฤษภาคม", 948_000, 0.89, datetime(2026, 4, 23, 14, 20)),
-        (res_b, m4, LinkType.PROGRESS_REPORTED, "ผู้รับจ้างยังส่งมอบไม่ครบ ขอเลื่อนอีกครั้งเป็นสิ้นเดือนมิถุนายน", 1_017_000, 0.90, datetime(2026, 5, 21, 14, 25)),
-        (res_b, m5, LinkType.PROGRESS_REPORTED, "ผู้รับจ้างส่งมอบโมดูลไม่ครบ ทำให้ยังทดสอบระบบไม่ได้ครับ", 1_040_000, 0.93, datetime(2026, 6, 18, 15, 10)),
-        (res_c, m5, LinkType.CREATED, "ที่ประชุมมีมติให้แต่งตั้งคณะทำงานจัดทำคำของบประมาณประจำปี 2570", 1_588_000, 0.96, datetime(2026, 6, 18, 14, 0)),
-        (res_e, m5, LinkType.CLOSED, "เรื่องปรับปรุงห้องประชุมใหญ่ ดำเนินการแล้วเสร็จและตรวจรับเรียบร้อยแล้ว", 1_842_000, 1.0, datetime(2026, 6, 18, 15, 30)),
-        (res_j, m4, LinkType.SUPERSEDED, "ขอปรับจำนวนเป็น 12 เครื่องและเปลี่ยนวิธีจัดซื้อเป็น e-bidding", 1_530_000, 1.0, datetime(2026, 5, 21, 15, 0)),
+        (res_payment, m1, LinkType.CREATED, "วางแผนเชื่อมต่อ Payment Gateway เพื่อรองรับรอบ Beta", 0, 0.95, datetime(2026, 7, 10, 10, 0)),
+        (res_payment, m2, LinkType.PROGRESS_REPORTED, "ติดปัญหา Production Key จากผู้ให้บริการ (Blocked)", 120_000, 0.92, datetime(2026, 7, 24, 10, 30)),
+        (res_payment, m3, LinkType.CLOSED, "ผู้ให้บริการปลดล็อก Production Key ให้แล้ว ทดสอบตัดบัตรและ PromptPay ผ่านฉลุย", 24_000, 0.98, datetime(2026, 8, 7, 10, 30)),
+        (res_ad_budget, m3, LinkType.CREATED, "อนุมัติเกลี่ยงบ 50,000 บาทสำหรับจ้าง Influencer โดยคุมยอดรวมไม่เกิน 500k", 160_000, 0.96, datetime(2026, 8, 7, 10, 45)),
+        (res_landing_page, m3, LinkType.CREATED, "หน้า Landing Page สมัคร Early Access พร้อมเปิดวันศุกร์นี้ที่ราคา 299 บาท/เดือน", 195_000, 0.97, datetime(2026, 8, 7, 11, 0)),
     ]:
         session.add(
             ResolutionLink(
@@ -345,32 +261,34 @@ async def seed(session: AsyncSession) -> None:
             )
         )
 
+    # ── ประวัติการเปลี่ยนแปลงสถานะ (Resolution History) ─────────────────
     for field, old, new, reason, when, meeting_row in [
-        ("due_date", "2026-03-31", "2026-05-15", "ที่ประชุมครั้งที่ 3/2569 อนุมัติให้ขยายเวลา", datetime(2026, 4, 23, 14, 20), m3),
-        ("due_date", "2026-05-15", "2026-06-30", "ผู้รับจ้างส่งมอบล่าช้า", datetime(2026, 5, 21, 14, 25), m4),
-        ("due_date", "2026-06-30", "2026-08-31", "ที่ประชุมครั้งที่ 5/2569 ให้เร่งรัดผู้รับจ้าง", datetime(2026, 6, 18, 15, 10), m5),
-        ("status", "in_progress", "blocked", "ติดปัญหาผู้รับจ้างส่งมอบไม่ครบ", datetime(2026, 6, 18, 15, 12), m5),
+        ("status", "in_progress", "blocked", "รอ Production Key จาก Payment Gateway Provider", datetime(2026, 7, 24, 10, 35), m2),
+        ("status", "blocked", "done", "ทดสอบผ่านระบบตัดบัตรเครดิตและ PromptPay แล้ว", datetime(2026, 8, 7, 10, 30), m3),
+        ("due_date", "2026-08-15", "2026-08-31", "ขยายเวลารวมช่วง Tech Influencer Review", datetime(2026, 8, 7, 10, 45), m3),
     ]:
         session.add(
             ResolutionHistory(
-                resolution_id=res_b.id, field=field, old_value=old, new_value=new,
-                changed_by=SECRETARY, changed_at=when, reason=reason, source_meeting_id=meeting_row.id,
+                resolution_id=res_payment.id if "Payment" in reason or "บัตรเครดิต" in reason else res_ad_budget.id,
+                field=field, old_value=old, new_value=new,
+                changed_by=LEAD_ACTOR, changed_at=when, reason=reason, source_meeting_id=meeting_row.id,
             )
         )
 
-    # ── คิวส่งออกที่รออนุมัติ ───────────────────────────────────────────
+    # ── คิวส่งออกและอีเมลแจ้งเตือน (Outbound Actions) ─────────────────
     session.add(
         OutboundAction(
-            series_id=exec_series.id,
-            resolution_id=res_a.id,
+            series_id=launch_series.id,
+            resolution_id=res_ad_budget.id,
             action_type="send_resolution_reminder",
-            recipient_person_id=supply.id,
-            subject="แจ้งเตือน: มติ 5/2569 ข้อ 4.1 เกินกำหนดแล้ว",
+            recipient_person_id=mint.id,
+            subject="แจ้งเตือน Action Item: ส่งรายงาน Conversion & TikTok Ads ทุกเย็นวันศุกร์",
             body=(
-                "ระบบขอแจ้งเตือนมติที่อยู่ในความรับผิดชอบของท่าน\n\n"
-                f"“{res_a.text}”\n\n"
-                "อ้างถึง: มติ 5/2569 ข้อ 4.1 · กำหนดเดิม 18 กรกฎาคม 2569\n\n"
-                "กรุณาแจ้งความคืบหน้ากลับผ่านลิงก์ในอีเมล โดยไม่ต้องเข้าสู่ระบบ"
+                "เรียน คุณมิ้น (Growth Lead)\n\n"
+                "ระบบสรุป Action Item จากที่ประชุม Pre-Launch Sync:\n\n"
+                f"“{res_ad_budget.text}”\n\n"
+                "กำหนดส่ง: 31 สิงหาคม 2569\n\n"
+                "สามารถรายงานผลหรืออัปเดตผ่านระบบ SARA ได้ทันที"
             ),
             status=ActionStatus.PENDING_APPROVAL,
         )
@@ -378,10 +296,10 @@ async def seed(session: AsyncSession) -> None:
 
     session.add_all(
         [
-            AuditLog(org_id=org.id, actor=SECRETARY, action="meeting_approved", entity_type="meeting",
-                     entity_id=str(m5.id), meta="รับรองรายงานการประชุมครั้งที่ 5/2569"),
-            AuditLog(org_id=org.id, actor=SECRETARY, action="confirm_alias", entity_type="person",
-                     entity_id=str(deputy.id), meta='ยืนยัน "พี่หนึ่ง" → นายสุรชัย ทองอินทร์'),
+            AuditLog(org_id=org.id, actor=LEAD_ACTOR, action="meeting_approved", entity_type="meeting",
+                     entity_id=str(m3.id), meta="รับรองรายงานการประชุม Pre-Launch Sync"),
+            AuditLog(org_id=org.id, actor=LEAD_ACTOR, action="confirm_alias", entity_type="person",
+                     entity_id=str(karn.id), meta='ยืนยัน "Tech Lead" → กานต์ (Karn)'),
         ]
     )
 
@@ -399,10 +317,6 @@ async def reset(session: AsyncSession) -> None:
 
 
 async def main(force_reset: bool) -> None:
-    """
-    ไม่สร้างตารางเอง — schema เป็นหน้าที่ของ Alembic เท่านั้น
-    ถ้า create_all อยู่ตรงนี้ migration ที่หายไปจะถูกกลบจนไม่มีใครรู้ว่าหลุด
-    """
     async with AsyncSessionLocal() as session:
         try:
             await session.execute(select(Organization).limit(1))
@@ -419,7 +333,7 @@ async def main(force_reset: bool) -> None:
             print("มีข้อมูลอยู่แล้ว — ใช้ --reset ถ้าต้องการล้างแล้วสร้างใหม่")
             return
         await seed(session)
-        print("สร้างข้อมูลตั้งต้นเรียบร้อย")
+        print("สร้างข้อมูลตั้งต้น NovaTech Studio เรียบร้อย")
 
     await engine.dispose()
 

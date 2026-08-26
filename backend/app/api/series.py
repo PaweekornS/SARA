@@ -303,7 +303,14 @@ def _jsonable(data: dict) -> dict:
     return out
 
 
-# ── ก้อนข้อมูลทั้งหมดสำหรับ frontend ────────────────────────────────────
+@router.post("/reset-demo")
+async def reset_demo_database(db: AsyncSession = Depends(get_db)):
+    """ล้างฐานข้อมูลแล้วสร้างข้อมูลตั้งต้นใหม่ตาม Mock_Data_Update.md"""
+    from app.seed import reset, seed
+    await reset(db)
+    await seed(db)
+    return {"status": "ok", "message": "รีเซตข้อมูลเดโม NovaTech Studio เรียบร้อย"}
+
 
 @router.get("/bootstrap", response_model=Bootstrap)
 async def bootstrap(db: AsyncSession = Depends(get_db), org: Organization = Depends(current_org)):
@@ -312,6 +319,11 @@ async def bootstrap(db: AsyncSession = Depends(get_db), org: Organization = Depe
     หน้าจอฝั่ง client เก็บ state ทั้งก้อนอยู่แล้ว การดึงทีเดียวจึงเรียบง่ายกว่าการต่อ endpoint ทีละหน้า
     ถ้าข้อมูลโตกว่าระดับ pilot ค่อยแตกเป็น endpoint ย่อยตาม §6 ซึ่งมีให้ครบแล้ว
     """
+    if org.name != "NovaTech Studio (Demo Workspace)":
+        from app.seed import reset, seed
+        await reset(db)
+        await seed(db)
+        org = (await db.execute(select(Organization).order_by(Organization.created_at))).scalars().first()
     series = list(
         (await db.execute(select(MeetingSeries).where(MeetingSeries.org_id == org.id))).scalars().all()
     )

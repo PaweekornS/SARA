@@ -226,11 +226,70 @@ export function cancelAction(id: Uuid, actor: string) {
   return request(`/actions/${id}/cancel`, { method: "POST", actor });
 }
 
-/* ── M8 ถาม-ตอบ ──────────────────────────────────────────────────────── */
-
 export function askSeries(seriesId: Uuid, question: string): Promise<QaAnswer> {
   return request<QaAnswer>(`/series/${seriesId}/ask`, {
     method: "POST",
     body: JSON.stringify({ question }),
   });
 }
+
+/* ── v3.0.0 Public Stateless API & Auth ────────────────────────────────── */
+
+export async function summarizePublicFile(
+  file: File,
+  template: string = "general",
+  recipients?: string[],
+  email_subject?: string,
+) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("template", template);
+  if (recipients && recipients.length > 0) {
+    form.append("recipients", JSON.stringify(recipients));
+  }
+  if (email_subject) {
+    form.append("email_subject", email_subject);
+  }
+  return request<any>("/public/summarize", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function authGoogle(id_token: string, client_id?: string) {
+  return request<any>("/auth/google", {
+    method: "POST",
+    body: JSON.stringify({ id_token, client_id }),
+  });
+}
+
+export function authDemo(name?: string, email?: string) {
+  return request<any>("/auth/demo", {
+    method: "POST",
+    body: JSON.stringify({ name, email }),
+  });
+}
+
+export function resetDemoBackend() {
+  return request<{ status: string; message: string }>("/reset-demo", {
+    method: "POST",
+  });
+}
+
+export function getAuthMe() {
+  return request<any>("/auth/me");
+}
+
+export function sendDirectEmail(payload: {
+  recipients: string[];
+  subject: string;
+  summary_text: string;
+  template_name?: string;
+  items?: any[];
+}) {
+  return request<any>("/public/send-email", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+

@@ -109,27 +109,8 @@ services:
       - redis
       - mcp_server
 
-  # ---------------------------------
-  # 6. Celery beat — FR-M7-06 trigger ตามเวลา (สแกนมติใกล้ครบกำหนดทุกเช้า)
-  # ---------------------------------
-  celery_beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.backend
-    container_name: aiaas_celery_beat
-    restart: always
-    command: celery -A app.workers.tasks.celery_app beat --loglevel=info
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      - redis
-      - celery_worker
-
   # -------------------------------------
-  # 7. MCP server (ชั้น action ทั้งหมดออกทางนี้)
+  # 6. MCP server (ชั้น action ทั้งหมดออกทางนี้)
   # -------------------------------------
   mcp_server:
     build:
@@ -144,7 +125,7 @@ services:
       - .env
 
   # -------------------------------------
-  # 8. Next.js frontend
+  # 7. Next.js frontend
   # -------------------------------------
   frontend:
     build:

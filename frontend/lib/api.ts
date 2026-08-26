@@ -62,3 +62,59 @@ export function agendaExportUrl(agendaId: Uuid): string | null {
 export function minutesExportUrl(meetingId: Uuid): string | null {
   return store.LIVE ? http.minutesExportUrl(meetingId) : null;
 }
+
+/** v3.0.0 Public Stateless API Helper */
+export async function summarizePublicFile(
+  file: File,
+  template: string = "general",
+  recipients?: string[],
+  email_subject?: string,
+) {
+  return http.summarizePublicFile(file, template, recipients, email_subject);
+}
+
+export async function loginGoogle(id_token: string, client_id?: string) {
+  return http.authGoogle(id_token, client_id);
+}
+
+export async function loginDemo(name?: string, email?: string) {
+  return http.authDemo(name, email);
+}
+
+export async function fetchCurrentUser() {
+  return http.getAuthMe();
+}
+
+/** Series / Collection Management */
+export function createSeries(input: Parameters<typeof store.createSeries>[0]) {
+  return store.createSeries(input);
+}
+
+export function updateSeries(id: Uuid, patch: Parameters<typeof store.updateSeries>[1]) {
+  return store.updateSeries(id, patch);
+}
+
+export function deleteSeries(id: Uuid) {
+  return store.deleteSeries(id);
+}
+
+export async function sendDirectEmail(payload: {
+  recipients: string[];
+  subject: string;
+  summary_text: string;
+  template_name?: string;
+  items?: any[];
+}) {
+  if (store.LIVE) {
+    return http.sendDirectEmail(payload);
+  }
+  // If in mock mode without backend, simulate with timeout
+  try {
+    return await http.sendDirectEmail(payload);
+  } catch {
+    await new Promise((r) => setTimeout(r, 600));
+    return { status: "success", dispatched_count: payload.recipients.length };
+  }
+}
+
+

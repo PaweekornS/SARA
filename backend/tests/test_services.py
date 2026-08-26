@@ -351,26 +351,26 @@ class DocxOutput(unittest.TestCase):
 
     def test_minutes_contains_attendees_and_resolutions(self):
         blob = build_minutes_docx(
-            series_name="คณะกรรมการบริหาร ปีงบประมาณ 2569",
-            fiscal_year=2569,
-            sequence_no=5,
-            meeting_date=date(2026, 6, 18),
-            attendees=["นายธนกฤต อารีวงศ์ ผู้อำนวยการ"],
+            series_name="Alpha App Q3 Launch Campaign",
+            fiscal_year=2026,
+            sequence_no=3,
+            meeting_date=date(2026, 8, 7),
+            attendees=["ภัทร (Phat) Head of Product"],
             resolutions=[
                 {
-                    "title": "จัดทำ TOR",
-                    "text": "มอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน",
-                    "assignees": "ฝ่ายพัสดุ",
-                    "due_date": date(2026, 7, 18),
+                    "title": "Payment Gateway",
+                    "text": "เชื่อมต่อระบบชำระเงิน",
+                    "assignees": "กานต์ (Karn)",
+                    "due_date": date(2026, 8, 5),
                 }
             ],
-            segments=[{"start_ms": 12_000, "speaker": "นายธนกฤต อารีวงศ์", "text": "ขอเปิดการประชุมครับ"}],
+            segments=[{"start_ms": 12_000, "speaker": "ภัทร (Phat)", "text": "สวัสดีทุกคน วันนี้มาเช็คความพร้อมก่อนเปิด Beta สัปดาห์หน้า"}],
             template_path=None,
         )
         xml = xml_of(blob)
-        self.assertIn("นายธนกฤต", xml)
-        self.assertIn("ฝ่ายพัสดุ", xml)
-        self.assertIn("ขอเปิดการประชุมครับ", xml)
+        self.assertIn("ภัทร", xml)
+        self.assertIn("กานต์", xml)
+        self.assertIn("เช็คความพร้อม", xml)
 
     def test_minutes_survives_empty_content(self):
         blob = build_minutes_docx(
@@ -679,6 +679,146 @@ class QaResolutionFlow(unittest.TestCase):
         self.assertEqual(out.timeline[0].action, "เกิดมติ")
 
 
+class DomainTemplates(unittest.TestCase):
+    def test_all_templates_exist_and_have_prompts(self):
+        from app.services.templates import MeetingTemplateType, get_template, list_templates
+
+        templates = list_templates()
+        self.assertEqual(len(templates), 4)
+
+        for tmpl_type in MeetingTemplateType:
+            tmpl = get_template(tmpl_type)
+            self.assertIn("system_prompt", tmpl)
+            self.assertIn("output_schema", tmpl)
+            self.assertTrue(len(tmpl["system_prompt"]) > 50)
+
+    def test_invalid_template_defaults_to_general(self):
+        from app.services.templates import get_template
+
+        tmpl = get_template("non_existent_template")
+        self.assertEqual(tmpl["id"], "general")
+
+
+class JwtSecurityAndGoogleAuth(unittest.TestCase):
+    def test_jwt_create_and_verify(self):
+        from datetime import timedelta
+        from app.core.security import create_access_token, verify_access_token
+
+        data = {"id": "user-123", "email": "test@sara-ai.local", "name": "Test User"}
+        token = create_access_token(data, expires_delta=timedelta(hours=1))
+        payload = verify_access_token(token)
+
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["email"], "test@sara-ai.local")
+        self.assertEqual(payload["name"], "Test User")
+
+    def test_tampered_token_rejected(self):
+        from app.core.security import create_access_token, verify_access_token
+
+        token = create_access_token({"email": "test@sara-ai.local"})
+        tampered = token[:-4] + "xxxx"
+        self.assertIsNone(verify_access_token(tampered))
+
+    def test_mock_google_token_verification(self):
+        from app.core.security import verify_google_token
+
+        info = verify_google_token("mock-google-token-:alice@company.com:Alice Smith")
+        self.assertEqual(info["email"], "alice@company.com")
+        self.assertEqual(info["name"], "Alice Smith")
+
+
+class GenericSpeakerDiarization(unittest.TestCase):
+    def test_speaker_label_normalization(self):
+        from app.services.asr import _normalize_speaker_label, _split_sentences
+
+        self.assertEqual(_normalize_speaker_label("SPEAKER_00"), "Speaker 1")
+        self.assertEqual(_normalize_speaker_label("SPEAKER_01"), "Speaker 1")
+        self.assertEqual(_normalize_speaker_label("Speaker 2"), "Speaker 2")
+        self.assertEqual(_normalize_speaker_label(None, 2), "Speaker 3")
+
+    def test_split_sentences_detects_speaker_tags(self):
+        from app.services.asr import _split_sentences
+
+        text = "[Speaker 1]: สวัสดีครับทีมงาน\n[Speaker 2]: สวัสดีครับคุณสมชาย"
+        segments = _split_sentences(text, 0)
+        self.assertGreaterEqual(len(segments), 2)
+        self.assertEqual(segments[0].speaker_label, "Speaker 1")
+        self.assertEqual(segments[1].speaker_label, "Speaker 2")
+
+
+class PublicEmailGuardrails(unittest.TestCase):
+    def test_recipient_ceiling_enforcement(self):
+        import asyncio
+        from app.mcp_server import send_public_summary_email
+
+        eleven_recipients = [f"user{i}@example.com" for i in range(11)]
+        with self.assertRaises(ValueError):
+            asyncio.run(
+                send_public_summary_email(
+                    recipients=eleven_recipients,
+                    subject="Test Subject",
+                    summary_text="Test Summary",
+                )
+            )
+
+    def test_security_audit_footer_rendered(self):
+        from app.mcp_server import render_summary_html
+
+        html = render_summary_html(subject="Test Meeting", body="Summary content")
+        self.assertIn("Smart Autonomous Record Agent", html)
+        self.assertIn("Zero-Data Leakage Guarantee", html)
+
+
+class PublicSummarizeApiEndpoint(unittest.TestCase):
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        self.client = TestClient(app)
+
+    def test_get_templates_list(self):
+        res = self.client.get("/api/public/templates")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(len(data["templates"]), 4)
+
+    @patch("app.api.public.extract")
+    def test_stateless_summarize_text_file(self, mock_extract):
+        from app.services.extraction import ExtractionResult, NewResolution
+
+        mock_extract.return_value = ExtractionResult(
+            summary="สรุปแคมเปญ Q4",
+            key_points=["เป้าหมาย GMV 5 ล้าน"],
+            new_resolutions=[
+                NewResolution(text="จัดทำ Banner 3 ชุด", assignee_mention="Speaker 2", due_date="2026-09-01")
+            ],
+            raw_data={"kpis": ["GMV 5.0M"]},
+        )
+
+        file_content = b"[Speaker 1]: \xe0\xb8\xaa\xe0\xb8\xa7\xe0\xb8\xb1\xe0\xb8\xaa\xe0\xb8\x94\xe0\xb8\xb5\xe0\xb8\x84\xe0\xb8\xa3\xe0\xb8\xb1\xe0\xb8\x9a\n[Speaker 2]: \xe0\xb9\x80\xe0\xb8\x9b\xe0\xb9\x89\xe0\xb8\xb2\xe0\xb8\xab\xe0\xb8\xa1\xe0\xb8\xb2\xe0\xb8\xa2 Q4"
+        res = self.client.post(
+            "/v1/public/summarize",
+            files={"file": ("meeting.txt", file_content, "text/plain")},
+            data={"template": "marketing", "recipients": "test@example.com"},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["template_applied"], "marketing")
+        self.assertEqual(data["result"]["summary"], "สรุปแคมเปญ Q4")
+        self.assertEqual(data["email_dispatch"]["dispatched"], True)
+
+    def test_stateless_summarize_rejects_over_10_recipients(self):
+        recipients = ",".join([f"u{i}@example.com" for i in range(12)])
+        res = self.client.post(
+            "/v1/public/summarize",
+            files={"file": ("meeting.txt", b"Hello", "text/plain")},
+            data={"template": "general", "recipients": recipients},
+        )
+        self.assertEqual(res.status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

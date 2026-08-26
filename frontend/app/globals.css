@@ -1,113 +1,154 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   SARA v2 — Design tokens  ·  "Official Calm"
-   ราชการร่วมสมัย: กระดาษอุ่น + หมึกน้ำเงิน + ตราทอง
+   SARA v4 — Modern SaaS Design System  ·  "Electric Slate"
+   Next-Gen Workspace: Clean Slates + Electric Blue + Glowing Accents
    ========================================================================== */
 
 :root {
   /* surfaces */
-  --paper: #f4f5f7;
+  --paper: #f8fafc;
   --surface: #ffffff;
-  --surface-2: #fafbfc;
-  --surface-sunken: #eef0f4;
+  --surface-2: #f1f5f9;
+  --surface-sunken: #e2e8f0;
+
+  /* modern canvas & surfaces */
+  --bg-app: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-surface-hover: #f1f5f9;
+  --border-subtle: #e2e8f0;
 
   /* ink */
-  --ink: #131a26;
-  --ink-2: #3d4757;
-  --ink-3: #6b7688;
-  --ink-4: #97a0b0;
+  --ink: #0f172a;
+  --ink-2: #334155;
+  --ink-3: #64748b;
+  --ink-4: #94a3b8;
 
   /* lines */
-  --line: #dfe3ea;
-  --line-strong: #c8cfda;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
 
-  /* brand — navy หมึกราชการ */
-  --brand: #1e3a6e;
-  --brand-hover: #172f5c;
-  --brand-soft: #e9eefa;
+  /* brand — Electric Blue & Indigo */
+  --brand: #2563eb;
+  --brand-hover: #1d4ed8;
+  --brand-soft: #eff6ff;
   --brand-ink: #ffffff;
+  --brand-primary: #2563eb;
+  --brand-gradient: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
+  --brand-glow: rgba(37, 99, 235, 0.15);
 
-  /* seal — ทองตราครุฑ ใช้เน้นเฉพาะจุด */
-  --seal: #9a7517;
-  --seal-soft: #fbf3df;
+  /* seal / highlights */
+  --seal: #d97706;
+  --seal-soft: #fef3c7;
+
+  /* speaker tags */
+  --speaker-1: #2563eb;
+  --speaker-1-bg: #eff6ff;
+  --speaker-2: #059669;
+  --speaker-2-bg: #ecfdf5;
+  --speaker-3: #db2777;
+  --speaker-3-bg: #fdf2f8;
+  --speaker-4: #d97706;
+  --speaker-4-bg: #fffbeb;
 
   /* status */
-  --st-proposed: #6b7688;
-  --st-proposed-bg: #eef0f4;
-  --st-confirmed: #1e3a6e;
-  --st-confirmed-bg: #e9eefa;
-  --st-progress: #a35c07;
-  --st-progress-bg: #fdf1de;
-  --st-blocked: #b3261e;
-  --st-blocked-bg: #fceceb;
-  --st-done: #196b45;
-  --st-done-bg: #e6f4ed;
-  --st-cancelled: #7a8291;
-  --st-cancelled-bg: #f0f1f4;
-  --st-superseded: #6b4ba8;
-  --st-superseded-bg: #f0ebfa;
+  --st-proposed: #64748b;
+  --st-proposed-bg: #f1f5f9;
+  --st-confirmed: #2563eb;
+  --st-confirmed-bg: #eff6ff;
+  --st-progress: #d97706;
+  --st-progress-bg: #fef3c7;
+  --st-blocked: #dc2626;
+  --st-blocked-bg: #fef2f2;
+  --st-done: #059669;
+  --st-done-bg: #ecfdf5;
+  --st-cancelled: #64748b;
+  --st-cancelled-bg: #f1f5f9;
+  --st-superseded: #7c3aed;
+  --st-superseded-bg: #f5f3ff;
 
-  --danger: #b3261e;
-  --danger-bg: #fceceb;
-  --warn: #a35c07;
-  --warn-bg: #fdf1de;
-  --ok: #196b45;
-  --ok-bg: #e6f4ed;
+  --danger: #dc2626;
+  --danger-bg: #fef2f2;
+  --warn: #d97706;
+  --warn-bg: #fef3c7;
+  --ok: #059669;
+  --ok-bg: #ecfdf5;
 
-  --radius: 10px;
-  --shadow-1: 0 1px 2px rgba(19, 26, 38, 0.06), 0 1px 3px rgba(19, 26, 38, 0.04);
-  --shadow-2: 0 4px 12px rgba(19, 26, 38, 0.08), 0 1px 3px rgba(19, 26, 38, 0.04);
-  --shadow-3: 0 16px 40px rgba(19, 26, 38, 0.16);
+  --radius: 12px;
+  --shadow-1: 0 1px 3px rgba(15, 23, 42, 0.05), 0 1px 2px rgba(15, 23, 42, 0.03);
+  --shadow-2: 0 4px 14px rgba(15, 23, 42, 0.07), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-3: 0 20px 40px -15px rgba(15, 23, 42, 0.12);
 }
 
 .dark {
-  --paper: #0b111c;
-  --surface: #121a28;
-  --surface-2: #16202f;
-  --surface-sunken: #0e1622;
+  /* surfaces — Deep Modern Slate */
+  --paper: #090d16;
+  --surface: #111726;
+  --surface-2: #182238;
+  --surface-sunken: #0c1220;
 
-  --ink: #eef1f6;
-  --ink-2: #c3cad6;
-  --ink-3: #8d97a7;
-  --ink-4: #6b7688;
+  --bg-app: #090d16;
+  --bg-surface: #111726;
+  --bg-surface-hover: #182238;
+  --border-subtle: #1e293b;
 
-  --line: #222e42;
-  --line-strong: #31405a;
+  /* ink */
+  --ink: #f8fafc;
+  --ink-2: #cbd5e1;
+  --ink-3: #94a3b8;
+  --ink-4: #64748b;
 
-  --brand: #7ea2e0;
-  --brand-hover: #9ab7e9;
-  --brand-soft: #182741;
-  --brand-ink: #0b111c;
+  /* lines */
+  --line: #1e293b;
+  --line-strong: #334155;
 
-  --seal: #d9b256;
-  --seal-soft: #2a2313;
+  /* brand — Vibrant Electric Blue */
+  --brand: #3b82f6;
+  --brand-hover: #60a5fa;
+  --brand-soft: #172554;
+  --brand-ink: #ffffff;
+  --brand-primary: #3b82f6;
+  --brand-gradient: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+  --brand-glow: rgba(59, 130, 246, 0.22);
 
-  --st-proposed: #97a0b0;
-  --st-proposed-bg: #1c2637;
-  --st-confirmed: #7ea2e0;
-  --st-confirmed-bg: #182741;
-  --st-progress: #e0a54e;
-  --st-progress-bg: #2e2412;
-  --st-blocked: #ef8a83;
-  --st-blocked-bg: #33191a;
-  --st-done: #56c08c;
-  --st-done-bg: #12291f;
-  --st-cancelled: #8d97a7;
-  --st-cancelled-bg: #1b2434;
-  --st-superseded: #b193e8;
-  --st-superseded-bg: #231c39;
+  --seal: #fbbf24;
+  --seal-soft: #451a03;
 
-  --danger: #ef8a83;
-  --danger-bg: #33191a;
-  --warn: #e0a54e;
-  --warn-bg: #2e2412;
-  --ok: #56c08c;
-  --ok-bg: #12291f;
+  /* speaker tags (Dark Mode) */
+  --speaker-1: #60a5fa;
+  --speaker-1-bg: #172554;
+  --speaker-2: #34d399;
+  --speaker-2-bg: #064e3b;
+  --speaker-3: #f472b6;
+  --speaker-3-bg: #500724;
+  --speaker-4: #fbbf24;
+  --speaker-4-bg: #451a03;
 
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.45);
-  --shadow-3: 0 18px 44px rgba(0, 0, 0, 0.6);
+  --st-proposed: #94a3b8;
+  --st-proposed-bg: #1e293b;
+  --st-confirmed: #60a5fa;
+  --st-confirmed-bg: #172554;
+  --st-progress: #fbbf24;
+  --st-progress-bg: #451a03;
+  --st-blocked: #f87171;
+  --st-blocked-bg: #450a0a;
+  --st-done: #34d399;
+  --st-done-bg: #064e3b;
+  --st-cancelled: #94a3b8;
+  --st-cancelled-bg: #1e293b;
+  --st-superseded: #a78bfa;
+  --st-superseded-bg: #2e1065;
+
+  --danger: #f87171;
+  --danger-bg: #450a0a;
+  --warn: #fbbf24;
+  --warn-bg: #451a03;
+  --ok: #34d399;
+  --ok-bg: #064e3b;
+
+  --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, 0.6);
+  --shadow-3: 0 25px 50px -12px rgba(0, 0, 0, 0.85);
 }
 
 @theme inline {
@@ -160,42 +201,32 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ตัวเลขแบบตารางสำหรับสถิติ/วันที่ ไม่ให้ขยับตอนนับถอยหลัง */
 .tnum {
   font-variant-numeric: tabular-nums;
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--ink) 16%, transparent);
-  border: 3px solid transparent;
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+  border: 2px solid transparent;
   background-clip: content-box;
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--ink) 28%, transparent);
+  background: color-mix(in srgb, var(--ink) 32%, transparent);
   background-clip: content-box;
 }
 
 :focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
-  border-radius: 4px;
-}
-
-/* กระดาษราชการ สำหรับ preview เอกสารก่อน export */
-.doc-paper {
-  font-family: var(--font-sarabun), "TH Sarabun New", serif;
-  font-size: 17px;
-  line-height: 1.55;
-  color: #101418;
-  background: #fff;
+  border-radius: 6px;
 }
 
 @keyframes sara-fade-up {
@@ -209,7 +240,19 @@ body {
   }
 }
 .fade-up {
-  animation: sara-fade-up 0.28s ease-out both;
+  animation: sara-fade-up 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes sara-pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 15px var(--brand-glow);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(59, 130, 246, 0.35);
+  }
+}
+.pulse-glow {
+  animation: sara-pulse-glow 2.5s infinite ease-in-out;
 }
 
 @keyframes sara-sweep {
@@ -224,7 +267,7 @@ body {
   background-image: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in srgb, var(--brand) 14%, transparent) 50%,
+    color-mix(in srgb, var(--brand) 16%, transparent) 50%,
     transparent 100%
   );
   background-size: 200% 100%;

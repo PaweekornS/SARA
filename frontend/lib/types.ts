@@ -35,7 +35,52 @@ export interface Person {
 
 /* ── Meeting series / Meeting ─────────────────────────────────────────── */
 
-export type Cadence = "monthly" | "quarterly" | "biannual" | "adhoc";
+export type Cadence = "weekly" | "bi-weekly" | "monthly" | "quarterly" | "biannual" | "adhoc";
+
+export type MeetingTemplateType = "general" | "marketing" | "finance" | "tech_standup";
+
+export interface TemplateInfo {
+  id: MeetingTemplateType;
+  name: string;
+  description: string;
+  output_schema: string[];
+}
+
+export interface PublicSummarizeResponse {
+  status: "success" | "error";
+  processing_time_sec: number;
+  template_applied: MeetingTemplateType;
+  template_name: string;
+  audio_meta: {
+    duration_sec: number;
+    speakers_detected: number;
+    speakers_list: string[];
+  };
+  transcript: {
+    speaker: string;
+    start_ms: number;
+    end_ms: number;
+    text: string;
+  }[];
+  result: {
+    summary: string;
+    key_points?: string[];
+    [key: string]: any;
+  };
+  email_dispatch?: {
+    dispatched: boolean;
+    recipient_count: number;
+    recipients?: string[];
+  };
+}
+
+export interface UserSession {
+  id: string;
+  email: string;
+  name: string;
+  picture?: string;
+  provider: string;
+}
 
 export interface MeetingSeries {
   id: Uuid;
@@ -257,6 +302,7 @@ export interface Citation {
   resolution_id: Uuid | null;
   start_ms: number | null;
   quote: string;
+  text?: string;
 }
 
 export interface QaTimelineEntry {
