@@ -190,6 +190,7 @@ function ReadyMeeting({ meeting }: { meeting: Meeting }) {
   const [currentMs, setCurrentMs] = useState(0);
   const [renaming, setRenaming] = useState<Segment | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [tab, setTab] = useState<"summary" | "actions">("summary");
   const [copied, setCopied] = useState(false);
   const playerRef = useRef<AudioPlayerHandle>(null);
 
@@ -238,7 +239,7 @@ function ReadyMeeting({ meeting }: { meeting: Meeting }) {
             </span>
           </div>
 
-          <Card className="max-h-[640px] overflow-y-auto p-4 divide-y divide-line/60">
+          <Card className="h-[640px] overflow-y-auto p-4 divide-y divide-line/60">
             {segLoading ? (
               <Loading />
             ) : (
@@ -276,63 +277,85 @@ function ReadyMeeting({ meeting }: { meeting: Meeting }) {
           </Card>
         </div>
 
-        {/* สรุป */}
+        {/* สรุป + งานที่ต้องทำ — แท็บเดียวกัน สูงเท่าบทสนทนา เลื่อนในกล่อง */}
         <div className="lg:col-span-5 space-y-3">
           <div className="flex items-center justify-between px-1">
-            <h3 className="text-[14px] font-semibold text-ink flex items-center gap-2">
-              <Sparkles size={15} className="text-brand" />
-              <span>{t.pick("สรุปอัจฉริยะ", "Smart Summary")}</span>
-            </h3>
-            {template && <span className="rounded bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand">{template.name.split(" (")[0]}</span>}
-          </div>
-
-          <Card className="p-5 space-y-5">
-            <section className="space-y-2">
-              <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">{t.pick("ภาพรวม", "Overview")}</h4>
-              <p className="whitespace-pre-line rounded-[var(--radius)] bg-surface-2 p-3 text-[13px] leading-relaxed text-ink-2">
-                {meeting.summary || t.pick("— ไม่มีสรุป —", "— no summary —")}
-              </p>
-            </section>
-
-            {meeting.key_points.length > 0 && (
-              <section className="space-y-2">
-                <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">{t.pick("ประเด็นสำคัญ", "Key points")}</h4>
-                <ul className="space-y-1.5 text-[13px] text-ink-2">
-                  {meeting.key_points.map((p, i) => (
-                    <li key={i} className="flex gap-2">
-                      <span className="text-brand">•</span>
-                      <span>{p}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {Object.entries(meeting.details).map(([key, value]) => (
-              <DetailSection key={key} label={template?.detail_labels[key] ?? key} value={value} />
-            ))}
-
-            <div className="border-t border-line pt-4">
-              <button
-                onClick={() => void copy()}
-                className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line bg-surface-2 py-2 text-[12.5px] font-medium text-ink hover:bg-sunken cursor-pointer transition-colors"
-              >
-                {copied ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
-                <span>{copied ? t.pick("คัดลอกแล้ว!", "Copied!") : t.pick("คัดลอกเป็น Markdown", "Copy as Markdown")}</span>
-              </button>
+            <div className="flex items-center gap-1 rounded-[var(--radius)] bg-surface-2 p-0.5">
+              {(
+                [
+                  ["summary", <Sparkles key="i" size={14} />, t.pick("สรุปอัจฉริยะ", "Smart Summary"), null],
+                  ["actions", <ListChecks key="i" size={14} />, t.pick("งานที่ต้องทำ", "Action items"), items.filter((i) => !i.done).length],
+                ] as const
+              ).map(([key, icon, label, count]) => (
+                <button
+                  key={key}
+                  onClick={() => setTab(key)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-[calc(var(--radius)-2px)] px-3 py-1.5 text-[13px] font-semibold transition-colors cursor-pointer",
+                    tab === key ? "bg-[var(--bg-surface)] text-ink shadow-sm" : "text-ink-3 hover:text-ink",
+                  )}
+                >
+                  <span className="text-brand">{icon}</span>
+                  {label}
+                  {count ? <span className="rounded-full bg-brand px-1.5 text-[10.5px] leading-[16px] text-white">{count}</span> : null}
+                </button>
+              ))}
             </div>
-          </Card>
-
-          <div className="flex items-center justify-between px-1 pt-2">
-            <h3 className="text-[14px] font-semibold text-ink flex items-center gap-2">
-              <ListChecks size={15} className="text-brand" />
-              <span>{t.pick("งานที่ต้องทำต่อ", "Action items")}</span>
-            </h3>
-            <Button size="sm" variant="ghost" icon={<Plus size={13} />} onClick={() => setAddOpen(true)}>
-              {t("add")}
-            </Button>
+            {tab === "summary"
+              ? template && <span className="rounded bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand">{template.name.split(" (")[0]}</span>
+              : (
+                <Button size="sm" variant="ghost" icon={<Plus size={13} />} onClick={() => setAddOpen(true)}>
+                  {t("add")}
+                </Button>
+              )}
           </div>
-          <ActionItemList items={items} emptyText={t.pick("ไม่มีงานจากการประชุมนี้", "No action items from this meeting")} />
+
+          <Card className="flex h-[640px] flex-col overflow-hidden">
+            {tab === "summary" ? (
+              <>
+                <div className="flex-1 space-y-5 overflow-y-auto p-5">
+                  <section className="space-y-2">
+                    <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">{t.pick("ภาพรวม", "Overview")}</h4>
+                    <p className="whitespace-pre-line rounded-[var(--radius)] bg-surface-2 p-3 text-[13px] leading-relaxed text-ink-2">
+                      {meeting.summary || t.pick("— ไม่มีสรุป —", "— no summary —")}
+                    </p>
+                  </section>
+
+                  {meeting.key_points.length > 0 && (
+                    <section className="space-y-2">
+                      <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">{t.pick("ประเด็นสำคัญ", "Key points")}</h4>
+                      <ul className="space-y-1.5 text-[13px] text-ink-2">
+                        {meeting.key_points.map((p, i) => (
+                          <li key={i} className="flex gap-2">
+                            <span className="text-brand">•</span>
+                            <span>{p}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+
+                  {Object.entries(meeting.details).map(([key, value]) => (
+                    <DetailSection key={key} label={template?.detail_labels[key] ?? key} value={value} />
+                  ))}
+                </div>
+
+                <div className="border-t border-line p-3">
+                  <button
+                    onClick={() => void copy()}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line bg-surface-2 py-2 text-[12.5px] font-medium text-ink hover:bg-sunken cursor-pointer transition-colors"
+                  >
+                    {copied ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
+                    <span>{copied ? t.pick("คัดลอกแล้ว!", "Copied!") : t.pick("คัดลอกเป็น Markdown", "Copy as Markdown")}</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4">
+                <ActionItemList items={items} emptyText={t.pick("ไม่มีงานจากการประชุมนี้", "No action items from this meeting")} />
+              </div>
+            )}
+          </Card>
         </div>
       </div>
 
