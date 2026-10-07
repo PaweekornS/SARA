@@ -2,10 +2,11 @@
 
 /** ชิ้นส่วน UI พื้นฐานที่ทั้งแอปใช้ร่วมกัน — ไม่มี dependency นอกจาก Tailwind + lucide */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, X } from "lucide-react";
-import type { ResolutionStatus } from "@/lib/types";
+
+const noopSubscribe = () => () => {};
 
 export function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -83,47 +84,6 @@ export function CardHead({
       </div>
       {right && <div className="shrink-0">{right}</div>}
     </div>
-  );
-}
-
-/* ── สถานะมติ ─────────────────────────────────────────────────────────── */
-
-const STATUS_STYLE: Record<ResolutionStatus, { bg: string; fg: string }> = {
-  proposed: { bg: "var(--st-proposed-bg)", fg: "var(--st-proposed)" },
-  confirmed: { bg: "var(--st-confirmed-bg)", fg: "var(--st-confirmed)" },
-  in_progress: { bg: "var(--st-progress-bg)", fg: "var(--st-progress)" },
-  blocked: { bg: "var(--st-blocked-bg)", fg: "var(--st-blocked)" },
-  done: { bg: "var(--st-done-bg)", fg: "var(--st-done)" },
-  cancelled: { bg: "var(--st-cancelled-bg)", fg: "var(--st-cancelled)" },
-  superseded: { bg: "var(--st-superseded-bg)", fg: "var(--st-superseded)" },
-};
-
-/** สีจุดสถานะ ใช้ตอนต้องการแค่จุดเดียวไม่ใช่ป้ายเต็ม */
-export function statusColor(status: ResolutionStatus) {
-  return STATUS_STYLE[status].fg;
-}
-
-export function StatusPill({
-  status,
-  label,
-  size = "md",
-}: {
-  status: ResolutionStatus;
-  label: string;
-  size?: "sm" | "md";
-}) {
-  const s = STATUS_STYLE[status];
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full font-medium whitespace-nowrap",
-        size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-[12px]",
-      )}
-      style={{ background: s.bg, color: s.fg }}
-    >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.fg }} />
-      {label}
-    </span>
   );
 }
 
@@ -220,11 +180,8 @@ export function Modal({
   width?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  //  createPortal ต้องมี document — true เฉพาะฝั่ง browser
+  const mounted = useSyncExternalStore(noopSubscribe, () => true, () => false);
 
   useEffect(() => {
     if (!open) return;
@@ -461,6 +418,31 @@ export function Segmented<T extends string>({
           {o.count !== undefined && <span className="tnum ml-1.5 text-[11px] text-ink-4">{o.count}</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+/* ── สถานะการโหลดข้อมูล ──────────────────────────────────────────────── */
+
+export function ErrorNote({ error, onRetry }: { error: Error | string; onRetry?: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] bg-[var(--danger-bg)] px-3.5 py-2.5 text-[13px] text-[var(--danger)]">
+      <AlertTriangle size={15} className="shrink-0" />
+      <span className="min-w-0 flex-1">{typeof error === "string" ? error : error.message}</span>
+      {onRetry && (
+        <button onClick={onRetry} className="rounded border border-current px-2.5 py-1 text-[12px] font-medium cursor-pointer">
+          ลองใหม่
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function Loading({ label = "กำลังโหลด…" }: { label?: string }) {
+  return (
+    <div className="flex items-center justify-center gap-2 py-14 text-[13px] text-ink-3">
+      <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-brand" />
+      {label}
     </div>
   );
 }

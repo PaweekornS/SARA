@@ -1,27 +1,23 @@
-# Use lightweight official Node.js image
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Copy dependency manifests
+# dependency ก่อนโค้ด เพื่อให้ build ซ้ำใช้ cache ได้
 COPY package.json package-lock.json* ./
-
-# Install dependencies
 RUN npm ci
 
-# Copy the rest of the application code
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# NEXT_PUBLIC_* ถูกฝังตอน build ไม่ใช่ตอนรัน จึงต้องรับเป็น build arg
-# ค่าเริ่มต้นชี้ไป backend ที่มากับ docker compose และปิด mock ให้ใช้ข้อมูลจริง
-ARG NEXT_PUBLIC_API_URL=http://localhost:8000/api
-ARG NEXT_PUBLIC_USE_MOCK=false
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_USE_MOCK=$NEXT_PUBLIC_USE_MOCK
+# ค่าพวกนี้ถูกฝังตอน build จึงต้องรับเป็น build arg
+#   API_PROXY_TARGET  ปลายทางของ rewrite /api (ใช้ตอนไม่มี reverse proxy ข้างหน้า เช่นรันบนเครื่องตัวเอง)
+#   NEXT_PUBLIC_GOOGLE_CLIENT_ID  ปุ่ม Google Sign-In บนหน้า login
+ARG API_PROXY_TARGET=http://api:8000
+ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID=
+ENV API_PROXY_TARGET=$API_PROXY_TARGET
+ENV NEXT_PUBLIC_GOOGLE_CLIENT_ID=$NEXT_PUBLIC_GOOGLE_CLIENT_ID
 
-# Build the Next.js production bundle
 RUN npm run build
 
 EXPOSE 3000

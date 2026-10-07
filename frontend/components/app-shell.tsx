@@ -3,59 +3,46 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import {
-  AlertTriangle,
-  Bot,
-  CalendarClock,
-  ChevronDown,
-  FileStack,
-  FolderKanban,
-  FolderPlus,
-  Gauge,
-  Menu,
-  Moon,
-  Plus,
-  RotateCcw,
-  Settings,
-  Sparkles,
-  Sun,
-  Upload,
-  X,
-} from "lucide-react";
-import { useT } from "@/lib/i18n";
-import { LIVE, createSeries, hydrate, loadFromServer, resetDemo, setActiveSeriesId, setError, toggleTheme, useApp } from "@/lib/store";
-import { ConfirmModal, Modal, cn } from "./ui";
-import { UploadMeetingModal } from "./meeting-ingest";
+import { Bot, ChevronDown, FileStack, FolderKanban, Gauge, LogOut, Menu, Moon, Plus, Settings, Sparkles, Sun, X } from "lucide-react";
 import * as api from "@/lib/api";
+import { useCollections, useMe } from "@/lib/data";
+import { useT } from "@/lib/i18n";
+import { clearCache, invalidate } from "@/lib/query";
+import { hydratePrefs, toggleTheme, usePrefs } from "@/lib/store";
+import { Button, Field, Input, Modal, cn } from "./ui";
+
+/* หน้าที่ไม่ต้องมีแถบเมนู (ยังไม่ได้เข้าสู่ระบบ) */
+const BARE_PATHS = ["/login"];
 
 /* ── โครงหน้าหลัก: แถบซ้าย + ส่วนเนื้อหา ───────────────────────────── */
 
 export function AppShell({ children }: { children: React.ReactNode }) {
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const [uploadOpen, setUploadOpen] = useState(false);
   const pathname = usePathname();
-  const { db, theme, activeSeriesId: storedSeriesId } = useApp();
+  useEffect(() => hydratePrefs(), []);
+
+  if (BARE_PATHS.some((p) => pathname.startsWith(p))) {
+    return <div className="min-h-dvh bg-[var(--bg-app)] text-ink">{children}</div>;
+  }
+  return <Workspace>{children}</Workspace>;
+}
+
+function useActiveCollectionId(): string | undefined {
+  const pathname = usePathname();
+  return pathname.match(/^\/collections\/([^/]+)/)?.[1];
+}
+
+function Workspace({ children }: { children: React.ReactNode }) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const theme = usePrefs((p) => p.theme);
   const t = useT();
-
-  const match = pathname.match(/^\/(?:series|collections)\/([^/]+)/);
-  const pathSeriesId = match?.[1];
-
-  const isHomePage = pathname === "/" || pathname === "/collections";
-
-  const activeSeriesId = pathSeriesId || storedSeriesId || db.series[0]?.id;
-  const activeSeries = db.series.find((s) => s.id === activeSeriesId) ?? db.series[0];
-
-  useEffect(() => hydrate(), []);
+  const activeId = useActiveCollectionId();
+  const { data: collections } = useCollections();
+  const active = collections?.find((c) => c.id === activeId);
 
   return (
     <div className="flex min-h-dvh bg-[var(--bg-app)] text-ink">
-      <Sidebar
-        mobileOpen={mobileOpen}
-        onClose={() => setMobileOpen(false)}
-        onOpenUpload={() => setUploadOpen(true)}
-      />
+      <Sidebar mobileOpen={mobileOpen} onClose={() => setMobileOpen(false)} />
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Top Header Bar */}
         <header className="no-print sticky top-0 z-20 flex h-14 items-center justify-between border-b border-[var(--border-subtle)] bg-[var(--bg-surface)]/80 backdrop-blur-md px-4 sm:px-6 transition-colors">
           <div className="flex items-center gap-2.5 min-w-0">
             <button
@@ -65,23 +52,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             >
               <Menu size={18} />
             </button>
-            {!isHomePage && activeSeries && (
-              <div className="flex items-center gap-2 min-w-0">
-                <div className="flex items-center gap-2 text-[13.5px] font-semibold text-ink truncate">
-                  <span className="truncate">{activeSeries.name}</span>
-                </div>
-                {activeSeries.fiscal_year && (
-                  <span className="hidden sm:inline-flex items-center rounded-full bg-[var(--brand-soft)] px-2 py-0.5 text-[11px] font-medium text-brand shrink-0">
-                    ปี {activeSeries.fiscal_year}
-                  </span>
-                )}
-              </div>
-            )}
+            {active && <span className="truncate text-[13.5px] font-semibold text-ink">{active.name}</span>}
           </div>
 
           <div className="flex items-center gap-2 ml-auto shrink-0">
-            <UserProfileBadge />
-
+            <UserMenu />
             <button
               onClick={toggleTheme}
               className="flex items-center justify-center rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] p-2 text-ink-2 hover:bg-sunken hover:text-ink cursor-pointer shadow-xs transition-colors"
@@ -93,172 +68,147 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <ConnectionBanner />
         <main className="min-w-0 flex-1">{children}</main>
       </div>
-
-      {activeSeries && (
-        <UploadMeetingModal
-          open={uploadOpen}
-          onClose={() => setUploadOpen(false)}
-          seriesId={activeSeries.id}
-        />
-      )}
     </div>
   );
 }
 
-function UserProfileBadge() {
+export async function logout() {
+  try {
+    await api.auth.logout();
+  } finally {
+    clearCache();
+    window.location.assign("/login");
+  }
+}
+
+function UserMenu() {
   const t = useT();
-  const [user, setUser] = useState<{ name: string; email: string; loggedIn: boolean }>({
-    name: "ผู้ใช้ทั่วไป (Demo)",
-    email: "user@sara-ai.local",
-    loggedIn: false,
-  });
-  const [loginModal, setLoginModal] = useState(false);
+  const { data: me } = useMe();
+  const [open, setOpen] = useState(false);
+  if (!me) return null;
 
   return (
-    <>
+    <div className="relative">
       <button
-        onClick={() => setLoginModal(true)}
+        onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] px-2.5 py-1.5 text-[12px] font-medium text-ink-2 hover:bg-sunken hover:text-ink cursor-pointer transition-colors"
       >
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--brand-soft)] text-[11px] font-semibold text-brand">
-          {user.name.charAt(0)}
-        </span>
-        <span className="hidden sm:inline truncate max-w-[120px]">{user.name}</span>
+        {me.picture ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={me.picture} alt="" className="h-5 w-5 rounded-full" referrerPolicy="no-referrer" />
+        ) : (
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--brand-soft)] text-[11px] font-semibold text-brand">
+            {(me.name || me.email).charAt(0).toUpperCase()}
+          </span>
+        )}
+        <span className="hidden sm:inline truncate max-w-[140px]">{me.name || me.email}</span>
       </button>
 
-      <ConfirmModal
-        open={loginModal}
-        onClose={() => setLoginModal(false)}
-        title={t.pick("เข้าสู่ระบบ SARA (Google Account)", "Sign in to SARA")}
-        confirmLabel={t.pick("เข้าสู่ระบบด้วย Google", "Sign in with Google")}
-        cancelLabel={t("cancel")}
-        onConfirm={() => {
-          setUser({ name: "Demo Google User", email: "user@gmail.com", loggedIn: true });
-          setLoginModal(false);
-        }}
-      >
-        <div className="space-y-2.5 text-[13px] text-ink-2">
-          <p>
-            {t.pick(
-              "เข้าสู่ระบบด้วยบัญชี Google เพื่อบันทึกประวัติการประชุม สรุปข้อมูล และใช้งานระบบค้นหาอัจฉริยะ (RAG Copilot)",
-              "Sign in with your Google Account to sync meetings, summaries, and cross-meeting AI Copilot.",
-            )}
-          </p>
-          <div className="rounded-[var(--radius)] bg-surface-2 p-3 text-[12px] text-ink-3 space-y-1">
-            <div>✓ เข้าใช้งานได้ทันทีแบบไม่ต้องรออนุมัติ</div>
-            <div>✓ รองรับการแบ่งโฟลเดอร์/คอลเลกชันตามโปรเจกต์</div>
-            <div>✓ ปลอดภัยด้วยมาตรฐาน OAuth 2.0 / OpenID Connect</div>
-          </div>
-        </div>
-      </ConfirmModal>
-    </>
-  );
-}
-
-function ConnectionBanner() {
-  const t = useT();
-  const { lastError, loading } = useApp();
-
-  if (!LIVE || (!lastError && !loading)) return null;
-
-  return (
-    <div
-      className={cn(
-        "no-print flex flex-wrap items-center gap-3 border-b px-5 py-2 text-[13px]",
-        lastError
-          ? "border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[var(--danger-bg)] text-[var(--danger)]"
-          : "border-line bg-surface-2 text-ink-3",
-      )}
-    >
-      {lastError ? (
+      {open && (
         <>
-          <AlertTriangle size={15} className="shrink-0" />
-          <span className="min-w-0 flex-1">{lastError}</span>
-          <button
-            onClick={() => {
-              setError(null);
-              void loadFromServer();
-            }}
-            className="rounded border border-current px-2.5 py-1 text-[12px] font-medium cursor-pointer"
-          >
-            {t.pick("ลองใหม่", "Retry")}
-          </button>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="fade-up absolute right-0 top-full z-40 mt-1 w-56 rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] p-1 shadow-[var(--shadow-2)]">
+            <div className="px-3 py-2">
+              <p className="truncate text-[13px] font-medium text-ink">{me.name}</p>
+              <p className="truncate text-[11.5px] text-ink-3">{me.email}</p>
+            </div>
+            <button
+              onClick={() => void logout()}
+              className="flex w-full items-center gap-2 rounded px-3 py-2 text-[13px] text-ink-2 hover:bg-sunken hover:text-ink cursor-pointer"
+            >
+              <LogOut size={14} />
+              {t("logout")}
+            </button>
+          </div>
         </>
-      ) : (
-        <span>{t.pick("กำลังซิงก์ข้อมูลกับเซิร์ฟเวอร์…", "Syncing…")}</span>
       )}
     </div>
   );
 }
 
-function Sidebar({
-  mobileOpen,
-  onClose,
-  onOpenUpload,
-}: {
-  mobileOpen: boolean;
-  onClose: () => void;
-  onOpenUpload: () => void;
-}) {
+export function NewCollectionModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const t = useT();
   const router = useRouter();
-  const pathname = usePathname();
-  const { db, activeSeriesId: storedSeriesId } = useApp();
-  const series = db.series;
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const match = pathname.match(/^\/(?:series|collections)\/([^/]+)/);
-  const pathSeriesId = match?.[1];
-
-  useEffect(() => {
-    if (pathSeriesId) {
-      setActiveSeriesId(pathSeriesId);
+  const submit = async () => {
+    if (!name.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await api.collections.create({ name: name.trim(), description: description.trim() });
+      invalidate("collections");
+      setName("");
+      setDescription("");
+      onClose();
+      router.push(`/collections/${created.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
-  }, [pathSeriesId]);
+  };
 
-  const activeSeriesId = pathSeriesId || storedSeriesId || series[0]?.id;
-  const activeSeries = series.find((s) => s.id === activeSeriesId) ?? series[0];
-  const base = `/collections/${activeSeries?.id ?? ""}`;
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t.pick("สร้างคอลเลกชันใหม่", "New Collection")}
+      desc={t.pick(
+        "คอลเลกชันช่วยจัดกลุ่มการประชุมตามโปรเจกต์หรือทีม เพื่อให้ถามคำถามข้ามการประชุมและติดตามงานค้างได้",
+        "Group meetings by project or team to ask across meetings and track open tasks.",
+      )}
+      footer={
+        <>
+          <Button onClick={onClose}>{t("cancel")}</Button>
+          <Button variant="primary" disabled={!name.trim() || busy} onClick={submit}>
+            {t.pick("สร้างคอลเลกชัน", "Create")}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Field label={t.pick("ชื่อคอลเลกชัน / โปรเจกต์", "Collection / Project Name")} required>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && void submit()}
+            placeholder="e.g. Q4 Marketing Campaign / Sprint Alpha"
+            autoFocus
+          />
+        </Field>
+        <Field label={t.pick("คำอธิบายสั้นๆ", "Description")}>
+          <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. ประชุมทีมการตลาดทุกวันจันทร์" />
+        </Field>
+        {error && <p className="text-[12.5px] text-[var(--danger)]">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
 
-  const isHomePage = pathname === "/" || pathname === "/collections";
+function Sidebar({ mobileOpen, onClose }: { mobileOpen: boolean; onClose: () => void }) {
+  const t = useT();
+  const pathname = usePathname();
+  const activeId = useActiveCollectionId();
+  const { data: collections = [] } = useCollections();
+  const active = collections.find((c) => c.id === activeId);
+  const base = `/collections/${activeId ?? ""}`;
 
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [newCollectionOpen, setNewCollectionOpen] = useState(false);
-  const [newCollectionName, setNewCollectionName] = useState("");
-  const [resetOpen, setResetOpen] = useState(false);
 
-  const mainNav = isHomePage
-    ? [
-        { href: "/collections", label: t.pick("คอลเลกชันทั้งหมด", "All Collections"), icon: <FolderKanban size={16} />, exact: true },
-      ]
+  const mainNav = !activeId
+    ? [{ href: "/collections", label: t.pick("คอลเลกชันทั้งหมด", "All Collections"), icon: <FolderKanban size={16} />, exact: true }]
     : [
-        { href: `${base}`, label: t.pick("ภาพรวมคอลเลกชัน", "Collection Hub"), icon: <Gauge size={16} />, exact: true },
+        { href: base, label: t.pick("ภาพรวมคอลเลกชัน", "Collection Hub"), icon: <Gauge size={16} />, exact: true, badge: active?.open_action_count },
         { href: `${base}/meetings`, label: t.pick("รายการประชุม & สรุป", "Meetings & Transcripts"), icon: <FileStack size={16} /> },
-        { href: `${base}/ask`, label: t.pick("Ask SARA Copilot", "Ask SARA Copilot"), icon: <Sparkles size={16} className="text-brand" />, highlight: true },
+        { href: `${base}/ask`, label: "Ask SARA Copilot", icon: <Sparkles size={16} className="text-brand" />, highlight: true },
       ];
-
-  const handleCreateCollection = () => {
-    if (!newCollectionName.trim()) return;
-    try {
-      const createdId = createSeries({
-        name: newCollectionName.trim(),
-        committee_type: "General Project",
-        fiscal_year: new Date().getFullYear() + 543,
-        cadence: "adhoc",
-        member_ids: [],
-      });
-      if (createdId) {
-        setActiveSeriesId(createdId);
-        router.push(`/collections/${createdId}`);
-      }
-    } catch {
-      // fallback handled in store
-    }
-    setNewCollectionName("");
-    setNewCollectionOpen(false);
-  };
 
   return (
     <>
@@ -269,13 +219,8 @@ function Sidebar({
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
-        {/* Brand Logo */}
         <div className="flex items-center justify-between gap-3 px-4 py-4">
-          <Link
-            href="/collections"
-            onClick={onClose}
-            className="flex min-w-0 flex-1 items-center gap-2.5 transition-opacity hover:opacity-85"
-          >
+          <Link href="/collections" onClick={onClose} className="flex min-w-0 flex-1 items-center gap-2.5 transition-opacity hover:opacity-85">
             <SaraMark />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
@@ -290,8 +235,7 @@ function Sidebar({
           </button>
         </div>
 
-        {/* Collection Selector & Quick Switcher (Hidden on Home Page) */}
-        {!isHomePage && (
+        {activeId && (
           <div className="px-3">
             <div className="relative">
               <button
@@ -300,30 +244,28 @@ function Sidebar({
               >
                 <FolderKanban size={15} className="text-brand shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-4">Workspace / Collection</p>
-                  <p className="mt-0.5 truncate text-[13px] font-medium leading-tight text-ink">
-                    {activeSeries?.name ?? "—"}
-                  </p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-ink-4">Collection</p>
+                  <p className="mt-0.5 truncate text-[13px] font-medium leading-tight text-ink">{active?.name ?? "—"}</p>
                 </div>
                 <ChevronDown size={14} className={cn("shrink-0 text-ink-3 transition-transform", switcherOpen && "rotate-180")} />
               </button>
 
               {switcherOpen && (
                 <div className="fade-up absolute left-0 right-0 top-full z-10 mt-1 max-h-60 overflow-y-auto rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] shadow-[var(--shadow-2)]">
-                  {series.map((s) => (
+                  {collections.map((c) => (
                     <Link
-                      key={s.id}
-                      href={`/collections/${s.id}`}
+                      key={c.id}
+                      href={`/collections/${c.id}`}
                       onClick={() => {
                         setSwitcherOpen(false);
                         onClose();
                       }}
                       className={cn(
                         "block px-3 py-2.5 text-[13px] leading-tight hover:bg-sunken",
-                        s.id === activeSeries?.id ? "bg-[var(--brand-soft)] font-medium text-brand" : "text-ink-2",
+                        c.id === activeId ? "bg-[var(--brand-soft)] font-medium text-brand" : "text-ink-2",
                       )}
                     >
-                      {s.name}
+                      {c.name}
                     </Link>
                   ))}
                   <button
@@ -334,7 +276,7 @@ function Sidebar({
                     className="flex w-full items-center gap-2 border-t border-line px-3 py-2 text-[12.5px] font-medium text-brand hover:bg-[var(--brand-soft)] cursor-pointer"
                   >
                     <Plus size={14} />
-                    <span>{t.pick("สร้างคอลเลกชันใหม่", "+ New Collection")}</span>
+                    <span>{t.pick("สร้างคอลเลกชันใหม่", "New Collection")}</span>
                   </button>
                 </div>
               )}
@@ -342,22 +284,16 @@ function Sidebar({
           </div>
         )}
 
-        {/* Navigation items */}
         <nav className="mt-4 flex-1 space-y-6 overflow-y-auto px-3 pb-4">
           <NavGroup label={t.pick("เมนูหลัก", "Main Menu")}>
-            {mainNav.map((item) => {
-              const isActive = item.exact
-                ? pathname === item.href || (item.href.startsWith("/collections") && pathname === item.href.replace("/collections", "/series"))
-                : pathname.startsWith(item.href) || pathname.startsWith(item.href.replace("/collections", "/series"));
-              return (
-                <NavLink
-                  key={item.href}
-                  {...item}
-                  onNavigate={onClose}
-                  active={isActive}
-                />
-              );
-            })}
+            {mainNav.map((item) => (
+              <NavLink
+                key={item.href}
+                {...item}
+                onNavigate={onClose}
+                active={item.exact ? pathname === item.href : pathname.startsWith(item.href)}
+              />
+            ))}
           </NavGroup>
 
           <NavGroup label={t.pick("การตั้งค่า", "Preferences")}>
@@ -370,80 +306,9 @@ function Sidebar({
             />
           </NavGroup>
         </nav>
-
-        {/* Reset / Footer */}
-        <div className="border-t border-[var(--border-subtle)] px-3 py-3 space-y-2">
-          <button
-            onClick={() => setResetOpen(true)}
-            className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line px-2 py-2 text-[12px] text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer transition-colors"
-          >
-            <RotateCcw size={13} />
-            {t("resetDemo")}
-          </button>
-        </div>
       </aside>
 
-      {/* New Collection Modal */}
-      <Modal
-        open={newCollectionOpen}
-        onClose={() => setNewCollectionOpen(false)}
-        title={t.pick("สร้างคอลเลกชันใหม่", "Create New Collection")}
-      >
-        <div className="space-y-4 pt-1">
-          <p className="text-[13px] text-ink-3">
-            {t.pick(
-              "คอลเลกชันช่วยจัดกลุ่มการประชุมตามโปรเจกต์ ทีม หรือลูกค้า เพื่อให้ AI สามารถตอบคำถามข้ามการประชุมได้อย่างแม่นยำ",
-              "Collections group meetings by project, team, or client for cross-meeting AI analysis.",
-            )}
-          </p>
-          <div>
-            <label className="block text-[12px] font-medium text-ink-2 mb-1.5">
-              {t.pick("ชื่อคอลเลกชัน / โปรเจกต์", "Collection / Project Name")}
-            </label>
-            <input
-              type="text"
-              value={newCollectionName}
-              onChange={(e) => setNewCollectionName(e.target.value)}
-              placeholder="e.g. Q4 Growth & Marketing / Sprint Standups"
-              className="w-full rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] px-3 py-2 text-[13px] text-ink focus:border-brand focus:outline-none"
-              autoFocus
-              onKeyDown={(e) => e.key === "Enter" && handleCreateCollection()}
-            />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              onClick={() => setNewCollectionOpen(false)}
-              className="rounded-[var(--radius)] border border-line px-3 py-1.5 text-[13px] text-ink-2 hover:bg-sunken cursor-pointer"
-            >
-              {t("cancel")}
-            </button>
-            <button
-              onClick={handleCreateCollection}
-              disabled={!newCollectionName.trim()}
-              className="rounded-[var(--radius)] bg-brand px-4 py-1.5 text-[13px] font-medium text-white hover:bg-[var(--brand-hover)] disabled:opacity-50 cursor-pointer"
-            >
-              {t.pick("สร้างคอลเลกชัน", "Create")}
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      <ConfirmModal
-        open={resetOpen}
-        onClose={() => setResetOpen(false)}
-        title={t("resetDemo")}
-        confirmLabel={t.pick("ล้างข้อมูล", "Reset")}
-        cancelLabel={t("cancel")}
-        onConfirm={() => {
-          resetDemo();
-          setResetOpen(false);
-        }}
-      >
-        {t.pick(
-          "การประชุมและสรุปที่สร้างระหว่างทดลองใช้จะหายทั้งหมด แล้วกลับไปเป็นข้อมูลตั้งต้นของเดโม",
-          "Everything created during this session will be discarded and replaced with demo seed data.",
-        )}
-      </ConfirmModal>
+      <NewCollectionModal open={newCollectionOpen} onClose={() => setNewCollectionOpen(false)} />
     </>
   );
 }
@@ -498,7 +363,7 @@ function NavLink({
   );
 }
 
-function SaraMark() {
+export function SaraMark() {
   return (
     <div className="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand text-white shadow-xs">
       <Bot size={18} strokeWidth={2.2} />
@@ -528,7 +393,7 @@ export function PageHeader({
           <div className="min-w-0">
             {eyebrow && <div className="mb-1.5 flex items-center gap-2 text-[12px] text-ink-3">{eyebrow}</div>}
             <h1 className="text-[22px] font-semibold leading-tight tracking-tight text-ink">{title}</h1>
-            {desc && <p className="mt-1.5 max-w-2xl text-[13.5px] leading-relaxed text-ink-3">{desc}</p>}
+            {desc && <div className="mt-1.5 max-w-2xl text-[13.5px] leading-relaxed text-ink-3">{desc}</div>}
           </div>
           {actions && <div className="no-print flex flex-wrap items-center gap-2">{actions}</div>}
         </div>

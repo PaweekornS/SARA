@@ -41,9 +41,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.frontend
       args:
-        # same-origin: เรียก API ผ่าน /api บนโดเมนเดียวกับหน้าเว็บ
-        NEXT_PUBLIC_API_URL: /api
-        NEXT_PUBLIC_USE_MOCK: "false"
+        API_PROXY_TARGET: http://api:8000
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     ports:
       - "127.0.0.1:${BASE:-20130}:3000"

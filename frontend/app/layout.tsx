@@ -16,7 +16,7 @@ const plexMono = IBM_Plex_Mono({
   weight: ["400", "500"],
 });
 
-/* Sarabun ใช้เฉพาะหน้าตัวอย่างเอกสาร ให้หน้าจอใกล้เคียง TH Sarabun New ใน Word */
+/* Sarabun ใช้ในส่วนที่แสดงตัวอย่างเอกสาร */
 const sarabun = Sarabun({
   variable: "--font-sarabun",
   subsets: ["thai", "latin"],
@@ -24,9 +24,8 @@ const sarabun = Sarabun({
 });
 
 export const metadata: Metadata = {
-  title: "SARA · ระบบสารบรรณการประชุมอัตโนมัติ",
-  description:
-    "แปลงไฟล์เสียงประชุมเป็นรายงานการประชุมตามระเบียบสารบรรณ และติดตามมติทุกข้อข้ามการประชุมจนกว่าจะปิดจ๊อบ",
+  title: "SARA · ผู้ช่วยสรุปการประชุม",
+  description: "อัปโหลดเสียงประชุม ได้สรุปภาษาไทยและรายการงานที่ต้องทำ แล้วถามย้อนหลังข้ามการประชุมได้",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -40,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* ตั้งธีมก่อน paint แรก ไม่งั้นผู้ใช้ธีมมืดจะเห็นจอขาววาบทุกครั้งที่โหลด */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `try{var s=JSON.parse(localStorage.getItem("sara_v2_state")||"{}");if(s.theme==="dark")document.documentElement.classList.add("dark")}catch(e){}`,
+            __html: `try{var s=JSON.parse(localStorage.getItem("sara_prefs")||"{}");if(s.theme==="dark")document.documentElement.classList.add("dark")}catch(e){}`,
           }}
         />
         <AppShell>{children}</AppShell>

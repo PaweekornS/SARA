@@ -1,149 +1,89 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useImperativeHandle, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
-  ArrowLeft,
   Calendar,
   Check,
-  CheckCircle2,
   Clock,
   Copy,
   Download,
   FileText,
   FolderKanban,
   Headphones,
+  ListChecks,
   Mail,
   Pause,
   Play,
+  Plus,
   RotateCcw,
   RotateCw,
-  Share2,
   Sparkles,
-  Volume2,
+  Trash2,
 } from "lucide-react";
+import { ActionItemEditor, ActionItemList } from "@/components/action-items";
 import { PageBody, PageHeader } from "@/components/app-shell";
-import { QuickEmailShareModal } from "@/components/meeting-ingest";
-import { Badge, Button, Card, EmptyState, cn } from "@/components/ui";
+import { EmailSummaryModal, PipelineStatus } from "@/components/meeting-ingest";
+import { Button, Card, ConfirmModal, ErrorNote, Field, Input, Loading, Modal, cn } from "@/components/ui";
+import * as api from "@/lib/api";
+import { useCollection, useMeeting, useMeetingActions, useSegments, useTemplates } from "@/lib/data";
+import { formatThaiDate, formatTimecode, speakerLabel } from "@/lib/format";
 import { useT } from "@/lib/i18n";
-import { assigneeNames, formatThaiDate, formatTimecode, useApp } from "@/lib/store";
+import { invalidate } from "@/lib/query";
+import type { Meeting, Segment } from "@/lib/types";
 
-export default function MeetingStudioPage() {
+const SPEAKER_STYLES = [
+  "bg-[var(--speaker-1-bg)] text-[var(--speaker-1)] border-[var(--speaker-1)]/20",
+  "bg-[var(--speaker-2-bg)] text-[var(--speaker-2)] border-[var(--speaker-2)]/20",
+  "bg-[var(--speaker-3-bg)] text-[var(--speaker-3)] border-[var(--speaker-3)]/20",
+  "bg-[var(--speaker-4-bg)] text-[var(--speaker-4)] border-[var(--speaker-4)]/20",
+];
+
+export default function MeetingPage() {
   const t = useT();
-  const params = useParams<{ id: string; mid: string }>();
-  const seriesId = params.id;
-  const meetingId = params.mid;
+  const router = useRouter();
+  const { id: collectionId, mid: meetingId } = useParams<{ id: string; mid: string }>();
+  const { data: collection } = useCollection(collectionId);
+  const { data: meeting, error, loading, reload } = useMeeting(meetingId);
 
-  const { db } = useApp();
-  const collection = db.series.find((s) => s.id === seriesId);
-  const meeting = db.meetings.find((m) => m.id === meetingId);
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  const [playing, setPlaying] = useState(false);
-  const [currentTimeMs, setCurrentTimeMs] = useState(0);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [emailModalOpen, setEmailModalOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  if (!meeting) {
+  if (error) {
     return (
       <PageBody>
-        <Card>
-          <EmptyState
-            icon={<FileText size={24} />}
-            title={t.pick("ไม่พบการประชุมนี้", "Meeting not found")}
-            action={
-              <Link
-                href={`/collections/${seriesId}`}
-                className="rounded-[var(--radius)] bg-brand px-4 py-2 text-[13px] text-white"
-              >
-                {t.pick("กลับหน้าคอลเลกชัน", "Back to collection")}
-              </Link>
-            }
-          />
-        </Card>
+        <ErrorNote error={error} onRetry={reload} />
+        <Link href={`/collections/${collectionId}`} className="mt-4 inline-block text-[13px] text-brand hover:underline">
+          {t.pick("← กลับหน้าคอลเลกชัน", "← Back to collection")}
+        </Link>
       </PageBody>
     );
   }
+  if (loading || !meeting) return <Loading />;
 
-  const segments = db.segments
-    .filter((s) => s.meeting_id === meeting.id)
-    .sort((a, b) => a.start_ms - b.start_ms);
+  const ready = meeting.status === "ready";
 
-  const resolutions = db.resolutions.filter((r) => r.origin_meeting_id === meeting.id);
-  const totalDurationMs = segments.length > 0 ? segments[segments.length - 1].end_ms : 60000;
-
-  // Speaker label mapping
-  const speakerSet = Array.from(new Set(segments.map((s) => s.speaker_label || "Speaker 1")));
-
-  const getSpeakerStyle = (speaker: string) => {
-    const idx = speakerSet.indexOf(speaker);
-    if (idx === 0) return "bg-[var(--speaker-1-bg)] text-[var(--speaker-1)] border-[var(--speaker-1)]/20";
-    if (idx === 1) return "bg-[var(--speaker-2-bg)] text-[var(--speaker-2)] border-[var(--speaker-2)]/20";
-    if (idx === 2) return "bg-[var(--speaker-3-bg)] text-[var(--speaker-3)] border-[var(--speaker-3)]/20";
-    return "bg-[var(--speaker-4-bg)] text-[var(--speaker-4)] border-[var(--speaker-4)]/20";
-  };
-
-  const handleSeek = (ms: number) => {
-    setCurrentTimeMs(ms);
-    if (audioRef.current) {
-      audioRef.current.currentTime = ms / 1000;
-      if (!playing) {
-        audioRef.current.play().catch(() => {});
-        setPlaying(true);
-      }
+  const retry = async () => {
+    setActionError(null);
+    try {
+      await api.meetings.retry(meeting.id);
+      invalidate(`meetings:${meeting.id}`, `collections:${collectionId}`);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const togglePlay = () => {
-    if (!audioRef.current) return;
-    if (playing) {
-      audioRef.current.pause();
-      setPlaying(false);
-    } else {
-      audioRef.current.play().catch(() => {});
-      setPlaying(true);
+  const remove = async () => {
+    try {
+      await api.meetings.remove(meeting.id);
+      invalidate("collections");
+      router.push(`/collections/${collectionId}`);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+      setDeleteOpen(false);
     }
-  };
-
-  const handleSpeedChange = (speed: number) => {
-    setPlaybackSpeed(speed);
-    if (audioRef.current) {
-      audioRef.current.playbackRate = speed;
-    }
-  };
-
-  // Construct Markdown summary
-  const markdownSummary = `## สรุปการประชุม: ${meeting.title || `ครั้งที่ ${meeting.sequence_no}`}
-**วันที่:** ${formatThaiDate(meeting.meeting_date)}
-**คอลเลกชัน:** ${collection?.name || "Workspace"}
-
-### 📌 ประเด็นสำคัญและข้อสรุป (Key Takeaways)
-${resolutions.map((r, i) => `${i + 1}. **${r.ref_no || "ข้อสรุป"}:** ${r.text}`).join("\n") || "• สรุปการประชุมเสร็จสมบูรณ์"}
-
-### 🎯 แผนการดำเนินงาน (Action Items)
-${resolutions.map((r) => {
-  const names = assigneeNames(db, r).map((p) => p.full_name).join(", ");
-  return `- [ ] ${r.text} *(ผู้รับผิดชอบ: ${names || "ทีมงาน"})*`;
-}).join("\n") || "- [ ] ติดตามความคืบหน้าในรอบถัดไป"}
-`;
-
-  const handleCopyMarkdown = () => {
-    navigator.clipboard.writeText(markdownSummary);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
-  };
-
-  const handleExportMarkdown = () => {
-    const blob = new Blob([markdownSummary], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `meeting_summary_${meeting.sequence_no}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -152,252 +92,447 @@ ${resolutions.map((r) => {
         eyebrow={
           <div className="flex items-center gap-1.5 text-[12px] text-ink-3">
             <FolderKanban size={13} className="text-brand" />
-            <Link href={`/collections/${seriesId}`} className="hover:text-brand transition-colors">
+            <Link href={`/collections/${collectionId}`} className="hover:text-brand transition-colors">
               {collection?.name || "Collection"}
             </Link>
             <span>/</span>
-            <span>การประชุม #{meeting.sequence_no}</span>
+            <span>{t.pick("การประชุม", "Meeting")}</span>
           </div>
         }
-        title={meeting.title || `การประชุมครั้งที่ ${meeting.sequence_no}`}
+        title={meeting.title}
         desc={
           <div className="flex flex-wrap items-center gap-3 text-[13px] text-ink-3">
             <span className="flex items-center gap-1">
-              <Calendar size={13} /> {formatThaiDate(meeting.meeting_date)}
+              <Calendar size={13} /> {formatThaiDate(meeting.meeting_date ?? meeting.created_at)}
             </span>
-            <span className="flex items-center gap-1">
-              <Clock size={13} /> {formatTimecode(totalDurationMs)}
-            </span>
-            <span className="flex items-center gap-1">
-              <Headphones size={13} /> {speakerSet.length} {t.pick("ผู้พูด", "speakers")}
-            </span>
+            {meeting.source_filename && (
+              <span className="flex items-center gap-1">
+                <FileText size={13} /> {meeting.source_filename}
+              </span>
+            )}
           </div>
         }
         actions={
           <div className="flex items-center gap-2">
+            {ready && (
+              <>
+                <a
+                  href={api.meetings.exportUrl(meeting.id)}
+                  className="flex items-center gap-1.5 rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] px-3 py-1.5 text-[12.5px] font-medium text-ink-2 hover:bg-sunken hover:text-ink transition-colors shadow-xs"
+                >
+                  <Download size={14} />
+                  <span>.docx</span>
+                </a>
+                <button
+                  onClick={() => setEmailOpen(true)}
+                  className="flex items-center gap-1.5 rounded-[var(--radius)] bg-brand px-3.5 py-1.5 text-[12.5px] font-medium text-white hover:bg-[var(--brand-hover)] cursor-pointer transition-colors shadow-xs"
+                >
+                  <Mail size={14} />
+                  <span>{t.pick("ส่งอีเมลสรุป", "Email summary")}</span>
+                </button>
+              </>
+            )}
             <button
-              onClick={handleCopyMarkdown}
-              className="flex items-center gap-1.5 rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] px-3 py-1.5 text-[12.5px] font-medium text-ink-2 hover:bg-sunken hover:text-ink cursor-pointer transition-colors shadow-xs"
+              onClick={() => setDeleteOpen(true)}
+              className="rounded-[var(--radius)] border border-line p-2 text-ink-3 hover:bg-sunken hover:text-[var(--danger)] cursor-pointer transition-colors"
+              title={t("delete")}
+              aria-label={t("delete")}
             >
-              {copied ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
-              <span>{copied ? t.pick("คัดลอกแล้ว!", "Copied!") : t.pick("คัดลอก Markdown", "Copy Markdown")}</span>
-            </button>
-
-            <button
-              onClick={() => setEmailModalOpen(true)}
-              className="flex items-center gap-1.5 rounded-[var(--radius)] bg-brand px-3.5 py-1.5 text-[12.5px] font-medium text-white hover:bg-[var(--brand-hover)] cursor-pointer transition-colors shadow-xs"
-            >
-              <Mail size={14} />
-              <span>{t.pick("ส่งอีเมลสรุป", "Share Email")}</span>
+              <Trash2 size={14} />
             </button>
           </div>
         }
       />
 
       <PageBody className="space-y-4 max-w-[1300px] pb-16">
-        {/* Top Sticky Audio Player Bar */}
-        <div className="rounded-[var(--radius)] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 shadow-sm">
-          <audio
-            ref={audioRef}
-            src="/sample_meeting.mp3"
-            onTimeUpdate={(e) => setCurrentTimeMs(e.currentTarget.currentTime * 1000)}
-            onEnded={() => setPlaying(false)}
-          />
+        {actionError && <ErrorNote error={actionError} />}
 
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            {/* Play/Pause & Skip buttons */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => handleSeek(Math.max(0, currentTimeMs - 10000))}
-                className="rounded-lg p-2 text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer"
-                title="ย้อนกลับ 10 วินาที"
-              >
-                <RotateCcw size={16} />
-              </button>
-
-              <button
-                onClick={togglePlay}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-white shadow-xs hover:bg-[var(--brand-hover)] cursor-pointer transition-transform hover:scale-105"
-              >
-                {playing ? <Pause size={17} /> : <Play size={17} className="ml-0.5" />}
-              </button>
-
-              <button
-                onClick={() => handleSeek(Math.min(totalDurationMs, currentTimeMs + 10000))}
-                className="rounded-lg p-2 text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer"
-                title="ข้ามไปข้างหน้า 10 วินาที"
-              >
-                <RotateCw size={16} />
-              </button>
-
-              <span className="text-[12.5px] font-mono text-ink-2 pl-2">
-                {formatTimecode(currentTimeMs)} / {formatTimecode(totalDurationMs)}
-              </span>
-            </div>
-
-            {/* Scrubber Progress */}
-            <div className="flex-1 w-full max-w-md mx-2">
-              <input
-                type="range"
-                min={0}
-                max={totalDurationMs}
-                value={currentTimeMs}
-                onChange={(e) => handleSeek(Number(e.target.value))}
-                className="w-full h-1.5 bg-surface-2 rounded-lg appearance-none cursor-pointer accent-brand"
-              />
-            </div>
-
-            {/* Playback Speed Switcher */}
-            <div className="flex items-center gap-1">
-              {[1, 1.25, 1.5, 2].map((spd) => (
-                <button
-                  key={spd}
-                  onClick={() => handleSpeedChange(spd)}
-                  className={cn(
-                    "rounded px-2 py-1 text-[11.5px] font-medium transition-colors cursor-pointer",
-                    playbackSpeed === spd
-                      ? "bg-brand text-white"
-                      : "text-ink-3 hover:bg-sunken hover:text-ink",
-                  )}
-                >
-                  {spd}x
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* 2-Column Split: Transcript (Left/Center) vs Smart Summary Studio (Right) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-          {/* Transcript Column (7 cols) */}
-          <div className="lg:col-span-7 space-y-3">
-            <div className="flex items-center justify-between px-1">
-              <h3 className="text-[14px] font-semibold text-ink flex items-center gap-2">
-                <FileText size={15} className="text-brand" />
-                <span>{t.pick("บทสนทนาคำต่อคำ (Interactive Transcript)", "Interactive Transcript")}</span>
-              </h3>
-              <span className="text-[11.5px] text-ink-4">คลิกประโยคเพื่อฟังเสียง</span>
-            </div>
-
-            <Card className="max-h-[600px] overflow-y-auto p-4 divide-y divide-line/60">
-              {segments.length === 0 ? (
-                <p className="py-6 text-center text-[13px] text-ink-3">ไม่มีข้อมูลบทสนทนา</p>
-              ) : (
-                segments.map((s) => {
-                  const isCurrent = currentTimeMs >= s.start_ms && currentTimeMs <= s.end_ms;
-                  return (
-                    <div
-                      key={s.id}
-                      onClick={() => handleSeek(s.start_ms)}
-                      className={cn(
-                        "group py-3 px-2 rounded-lg cursor-pointer transition-all",
-                        isCurrent ? "bg-[var(--brand-soft)] ring-1 ring-brand/30" : "hover:bg-surface-2",
-                      )}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span
-                          className={cn(
-                            "rounded border px-2 py-0.5 text-[11px] font-semibold",
-                            getSpeakerStyle(s.speaker_label || "Speaker 1"),
-                          )}
-                        >
-                          {s.speaker_label || "Speaker 1"}
-                        </span>
-                        <span className="text-[11px] font-mono text-ink-4 group-hover:text-brand">
-                          {formatTimecode(s.start_ms)}
-                        </span>
-                      </div>
-                      <p className="text-[13.5px] leading-relaxed text-ink-2 group-hover:text-ink">
-                        {s.text}
-                      </p>
-                    </div>
-                  );
-                })
-              )}
-            </Card>
-          </div>
-
-          {/* Smart Summary Studio (5 cols) */}
-          <div className="lg:col-span-5 space-y-3">
-            <div className="flex items-center justify-between px-1">
-              <h3 className="text-[14px] font-semibold text-ink flex items-center gap-2">
-                <Sparkles size={15} className="text-brand" />
-                <span>{t.pick("สรุปข้อมูลอัจฉริยะ (Smart Summary)", "Smart Summary")}</span>
-              </h3>
-              <span className="rounded bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand">
-                General / Executive
-              </span>
-            </div>
-
-            <Card className="p-5 space-y-5">
-              {/* Summary Section */}
-              <div className="space-y-2">
-                <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">
-                  ภาพรวมการประชุม (Executive Summary)
-                </h4>
-                <p className="text-[13px] text-ink-2 leading-relaxed bg-surface-2 p-3 rounded-[var(--radius)]">
-                  {meeting.title || "การประชุม"} ได้ข้อสรุปสำคัญเกี่ยวกับแผนการดำเนินงานและการแบ่งหน้าที่รับผิดชอบ
-                  โดยมีมติที่ผ่านการยืนยันทั้งหมด {resolutions.length} รายการ
-                </p>
-              </div>
-
-              {/* Key Takeaways / Decisions */}
-              <div className="space-y-2.5">
-                <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4 flex items-center justify-between">
-                  <span>ข้อสรุป & การตัดสินใจ ({resolutions.length})</span>
-                </h4>
-                <div className="space-y-2">
-                  {resolutions.map((r, idx) => {
-                    const names = assigneeNames(db, r).map((p) => p.full_name).join(", ");
-                    return (
-                      <div
-                        key={r.id}
-                        className="rounded-[var(--radius)] border border-line bg-[var(--bg-surface)] p-3 text-[12.5px] space-y-1"
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-brand">{r.ref_no || `ข้อสรุปที่ ${idx + 1}`}</span>
-                          {names && (
-                            <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10.5px] text-ink-3">
-                              {names}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-ink-2 leading-relaxed">{r.text}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Quick Action Footer */}
-              <div className="border-t border-line pt-4 flex flex-wrap gap-2">
-                <button
-                  onClick={handleCopyMarkdown}
-                  className="flex-1 flex items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line bg-surface-2 py-2 text-[12.5px] font-medium text-ink hover:bg-sunken cursor-pointer transition-colors"
-                >
-                  <Copy size={13} />
-                  <span>{copied ? "คัดลอกแล้ว!" : "Copy Markdown"}</span>
-                </button>
-
-                <button
-                  onClick={handleExportMarkdown}
-                  className="flex items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line bg-surface-2 px-3 py-2 text-[12.5px] font-medium text-ink hover:bg-sunken cursor-pointer transition-colors"
-                  title="Download .md"
-                >
-                  <Download size={13} />
-                </button>
-              </div>
-            </Card>
-          </div>
-        </div>
+        {ready ? (
+          <ReadyMeeting meeting={meeting} />
+        ) : (
+          <Card className="mx-auto max-w-xl p-6">
+            <h3 className="mb-4 text-[15px] font-semibold text-ink">
+              {meeting.status === "processing" ? t.pick("กำลังประมวลผลการประชุม…", "Processing meeting…") : t.pick("ประมวลผลไม่สำเร็จ", "Processing failed")}
+            </h3>
+            <PipelineStatus meeting={meeting} onRetry={retry} />
+            {meeting.status === "processing" && (
+              <p className="mt-4 text-[12px] text-ink-4">
+                {t.pick("ปิดหน้านี้ได้ ระบบประมวลผลต่อเบื้องหลัง ไฟล์เสียงยาวอาจใช้เวลาหลายนาที", "You can leave this page — processing continues in the background.")}
+              </p>
+            )}
+          </Card>
+        )}
       </PageBody>
 
-      <QuickEmailShareModal
-        open={emailModalOpen}
-        onClose={() => setEmailModalOpen(false)}
-        title={meeting.title || `การประชุมครั้งที่ ${meeting.sequence_no}`}
-        summary={markdownSummary}
-      />
+      {ready && <EmailSummaryModal open={emailOpen} onClose={() => setEmailOpen(false)} meeting={meeting} />}
+
+      <ConfirmModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title={t.pick("ลบการประชุมนี้?", "Delete this meeting?")}
+        confirmLabel={t("delete")}
+        cancelLabel={t("cancel")}
+        onConfirm={remove}
+      >
+        {t.pick(`ไฟล์ บันทึก สรุป และงานของ “${meeting.title}” จะถูกลบถาวร`, `The file, transcript, summary and tasks of "${meeting.title}" will be deleted.`)}
+      </ConfirmModal>
     </>
+  );
+}
+
+function ReadyMeeting({ meeting }: { meeting: Meeting }) {
+  const t = useT();
+  const { data: segments = [], loading: segLoading } = useSegments(meeting);
+  const { data: items = [] } = useMeetingActions(meeting);
+  const { data: templates = [] } = useTemplates();
+  const template = templates.find((tpl) => tpl.id === meeting.template);
+
+  const [currentMs, setCurrentMs] = useState(0);
+  const [renaming, setRenaming] = useState<Segment | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const playerRef = useRef<AudioPlayerHandle>(null);
+
+  const labels = Array.from(new Set(segments.map((s) => s.speaker_label)));
+  const styleOf = (label: string) => SPEAKER_STYLES[labels.indexOf(label) % SPEAKER_STYLES.length];
+
+  const markdown = [
+    `## ${meeting.title}`,
+    meeting.summary,
+    meeting.key_points.length ? `### ประเด็นสำคัญ\n${meeting.key_points.map((p) => `- ${p}`).join("\n")}` : "",
+    items.length
+      ? `### งานที่ต้องทำ\n${items.map((i) => `- [${i.done ? "x" : " "}] ${i.text}${i.owner ? ` (${i.owner})` : ""}`).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(markdown);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <>
+      {meeting.source_kind === "audio" && (
+        <AudioPlayer
+          ref={playerRef}
+          src={api.meetings.audioUrl(meeting.id)}
+          durationHintMs={segments.at(-1)?.end_ms ?? 0}
+          onTime={setCurrentMs}
+        />
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+        {/* บันทึกคำต่อคำ */}
+        <div className="lg:col-span-7 space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <h3 className="text-[14px] font-semibold text-ink flex items-center gap-2">
+              <FileText size={15} className="text-brand" />
+              <span>{t.pick("บทสนทนาคำต่อคำ", "Transcript")}</span>
+            </h3>
+            <span className="text-[11.5px] text-ink-4">
+              {t.pick("คลิกชื่อผู้พูดเพื่อตั้งชื่อ", "Click a speaker to rename")}
+              {meeting.source_kind === "audio" && t.pick(" · คลิกประโยคเพื่อฟัง", " · click a line to play")}
+            </span>
+          </div>
+
+          <Card className="max-h-[640px] overflow-y-auto p-4 divide-y divide-line/60">
+            {segLoading ? (
+              <Loading />
+            ) : (
+              segments.map((s) => {
+                const isCurrent = meeting.source_kind === "audio" && currentMs >= s.start_ms && currentMs < s.end_ms;
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => playerRef.current?.seek(s.start_ms)}
+                    className={cn(
+                      "group py-3 px-2 rounded-lg transition-all",
+                      meeting.source_kind === "audio" && "cursor-pointer",
+                      isCurrent ? "bg-[var(--brand-soft)] ring-1 ring-brand/30" : "hover:bg-surface-2",
+                    )}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRenaming(s);
+                        }}
+                        className={cn("rounded border px-2 py-0.5 text-[11px] font-semibold cursor-pointer hover:opacity-80", styleOf(s.speaker_label))}
+                      >
+                        {speakerLabel(s)}
+                      </button>
+                      {meeting.source_kind === "audio" && (
+                        <span className="text-[11px] font-mono text-ink-4 group-hover:text-brand">{formatTimecode(s.start_ms)}</span>
+                      )}
+                    </div>
+                    <p className="text-[13.5px] leading-relaxed text-ink-2 group-hover:text-ink">{s.text}</p>
+                  </div>
+                );
+              })
+            )}
+          </Card>
+        </div>
+
+        {/* สรุป */}
+        <div className="lg:col-span-5 space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <h3 className="text-[14px] font-semibold text-ink flex items-center gap-2">
+              <Sparkles size={15} className="text-brand" />
+              <span>{t.pick("สรุปอัจฉริยะ", "Smart Summary")}</span>
+            </h3>
+            {template && <span className="rounded bg-brand/10 px-2 py-0.5 text-[11px] font-semibold text-brand">{template.name.split(" (")[0]}</span>}
+          </div>
+
+          <Card className="p-5 space-y-5">
+            <section className="space-y-2">
+              <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">{t.pick("ภาพรวม", "Overview")}</h4>
+              <p className="whitespace-pre-line rounded-[var(--radius)] bg-surface-2 p-3 text-[13px] leading-relaxed text-ink-2">
+                {meeting.summary || t.pick("— ไม่มีสรุป —", "— no summary —")}
+              </p>
+            </section>
+
+            {meeting.key_points.length > 0 && (
+              <section className="space-y-2">
+                <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">{t.pick("ประเด็นสำคัญ", "Key points")}</h4>
+                <ul className="space-y-1.5 text-[13px] text-ink-2">
+                  {meeting.key_points.map((p, i) => (
+                    <li key={i} className="flex gap-2">
+                      <span className="text-brand">•</span>
+                      <span>{p}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {Object.entries(meeting.details).map(([key, value]) => (
+              <DetailSection key={key} label={template?.detail_labels[key] ?? key} value={value} />
+            ))}
+
+            <div className="border-t border-line pt-4">
+              <button
+                onClick={() => void copy()}
+                className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius)] border border-line bg-surface-2 py-2 text-[12.5px] font-medium text-ink hover:bg-sunken cursor-pointer transition-colors"
+              >
+                {copied ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
+                <span>{copied ? t.pick("คัดลอกแล้ว!", "Copied!") : t.pick("คัดลอกเป็น Markdown", "Copy as Markdown")}</span>
+              </button>
+            </div>
+          </Card>
+
+          <div className="flex items-center justify-between px-1 pt-2">
+            <h3 className="text-[14px] font-semibold text-ink flex items-center gap-2">
+              <ListChecks size={15} className="text-brand" />
+              <span>{t.pick("งานที่ต้องทำต่อ", "Action items")}</span>
+            </h3>
+            <Button size="sm" variant="ghost" icon={<Plus size={13} />} onClick={() => setAddOpen(true)}>
+              {t("add")}
+            </Button>
+          </div>
+          <ActionItemList items={items} emptyText={t.pick("ไม่มีงานจากการประชุมนี้", "No action items from this meeting")} />
+        </div>
+      </div>
+
+      <SpeakerRenameModal meeting={meeting} segment={renaming} onClose={() => setRenaming(null)} />
+      <ActionItemEditor meetingId={meeting.id} open={addOpen} onClose={() => setAddOpen(false)} />
+    </>
+  );
+}
+
+function DetailSection({ label, value }: { label: string; value: unknown }) {
+  const lines: string[] = Array.isArray(value)
+    ? value.map((v) => (v && typeof v === "object" ? Object.values(v).filter(Boolean).join(" · ") : String(v)))
+    : typeof value === "string"
+      ? [value]
+      : [];
+  if (lines.length === 0) return null;
+  return (
+    <section className="space-y-2">
+      <h4 className="text-[13px] font-semibold uppercase tracking-wider text-ink-4">{label}</h4>
+      <ul className="space-y-1.5 text-[13px] text-ink-2">
+        {lines.map((line, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="text-brand">•</span>
+            <span>{line}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function SpeakerRenameModal({ meeting, segment, onClose }: { meeting: Meeting; segment: Segment | null; onClose: () => void }) {
+  const t = useT();
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [lastId, setLastId] = useState<string | null>(null);
+
+  //  เปิดใหม่ด้วยผู้พูดคนอื่น → เติมชื่อเดิมของคนนั้น
+  if (segment && segment.id !== lastId) {
+    setLastId(segment.id);
+    setName(segment.speaker_name);
+    setError(null);
+  }
+
+  const save = async () => {
+    if (!segment) return;
+    setBusy(true);
+    try {
+      await api.meetings.renameSpeaker(meeting.id, segment.speaker_label, name.trim());
+      invalidate(`meetings:${meeting.id}:segments`);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={Boolean(segment)}
+      onClose={onClose}
+      title={t.pick("ตั้งชื่อผู้พูด", "Rename speaker")}
+      desc={t.pick(`ชื่อนี้จะใช้กับทุกท่อนของ ${segment?.speaker_label ?? ""} ในการประชุมนี้`, `Applies to every line by ${segment?.speaker_label ?? ""} in this meeting.`)}
+      width="max-w-md"
+      footer={
+        <>
+          <Button onClick={onClose}>{t("cancel")}</Button>
+          <Button variant="primary" onClick={save} disabled={busy}>
+            {t("save")}
+          </Button>
+        </>
+      }
+    >
+      <Field label={t.pick("ชื่อ", "Name")} hint={t.pick("เว้นว่างเพื่อกลับไปใช้ชื่อเดิม", "Leave empty to reset")}>
+        <Input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void save()} autoFocus maxLength={80} />
+      </Field>
+      {error && <p className="mt-2 text-[12.5px] text-[var(--danger)]">{error}</p>}
+    </Modal>
+  );
+}
+
+/* ── ตัวเล่นเสียง ─────────────────────────────────────────────────────── */
+
+interface AudioPlayerHandle {
+  seek: (ms: number) => void;
+}
+
+function AudioPlayer({
+  src,
+  durationHintMs,
+  onTime,
+  ref,
+}: {
+  src: string;
+  durationHintMs: number;
+  onTime: (ms: number) => void;
+  ref: React.Ref<AudioPlayerHandle>;
+}) {
+  const t = useT();
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentMs, setCurrentMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(0);
+  const [speed, setSpeed] = useState(1);
+  const [failed, setFailed] = useState(false);
+  const total = durationMs || durationHintMs;
+
+  const seek = (ms: number) => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = ms / 1000;
+    void audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+  };
+
+  useImperativeHandle(ref, () => ({ seek }));
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+      setPlaying(false);
+    } else {
+      void audio.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    }
+  };
+
+  return (
+    <div className="rounded-[var(--radius)] border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-4 shadow-sm">
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onLoadedMetadata={(e) => setDurationMs(e.currentTarget.duration * 1000 || 0)}
+        onTimeUpdate={(e) => {
+          const ms = e.currentTarget.currentTime * 1000;
+          setCurrentMs(ms);
+          onTime(ms);
+        }}
+        onEnded={() => setPlaying(false)}
+        onError={() => setFailed(true)}
+      />
+
+      {failed ? (
+        <p className="flex items-center gap-2 text-[12.5px] text-ink-3">
+          <Headphones size={14} /> {t.pick("เล่นไฟล์เสียงนี้ไม่ได้ (ไฟล์อาจถูกลบหรือเบราว์เซอร์ไม่รองรับนามสกุลนี้)", "This audio cannot be played.")}
+        </p>
+      ) : (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <button onClick={() => seek(Math.max(0, currentMs - 10_000))} className="rounded-lg p-2 text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer" title="-10s">
+              <RotateCcw size={16} />
+            </button>
+            <button
+              onClick={toggle}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-white shadow-xs hover:bg-[var(--brand-hover)] cursor-pointer transition-transform hover:scale-105"
+              aria-label={playing ? "Pause" : "Play"}
+            >
+              {playing ? <Pause size={17} /> : <Play size={17} className="ml-0.5" />}
+            </button>
+            <button onClick={() => seek(Math.min(total, currentMs + 10_000))} className="rounded-lg p-2 text-ink-3 hover:bg-sunken hover:text-ink cursor-pointer" title="+10s">
+              <RotateCw size={16} />
+            </button>
+            <span className="flex items-center gap-1 pl-2 font-mono text-[12.5px] text-ink-2">
+              <Clock size={12} /> {formatTimecode(currentMs)} / {formatTimecode(total)}
+            </span>
+          </div>
+
+          <div className="flex-1 w-full max-w-md mx-2">
+            <input
+              type="range"
+              min={0}
+              max={total || 1}
+              value={currentMs}
+              onChange={(e) => seek(Number(e.target.value))}
+              className="w-full h-1.5 bg-surface-2 rounded-lg appearance-none cursor-pointer accent-brand"
+            />
+          </div>
+
+          <div className="flex items-center gap-1">
+            {[1, 1.25, 1.5, 2].map((s) => (
+              <button
+                key={s}
+                onClick={() => {
+                  setSpeed(s);
+                  if (audioRef.current) audioRef.current.playbackRate = s;
+                }}
+                className={cn(
+                  "rounded px-2 py-1 text-[11.5px] font-medium transition-colors cursor-pointer",
+                  speed === s ? "bg-brand text-white" : "text-ink-3 hover:bg-sunken hover:text-ink",
+                )}
+              >
+                {s}x
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
