@@ -28,6 +28,23 @@ os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_DB
 #  ค่าที่ Settings บังคับให้มี แต่การทดสอบไม่ได้เรียกบริการภายนอกจริงสักตัว
 os.environ.setdefault("APP_AI4THAI_API_KEY", "test-key-not-used")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
-os.environ.setdefault("SECRET_KEY", "test-secret-for-magic-link")
-os.environ.setdefault("PUBLIC_BASE_URL", "http://testserver")
+os.environ.setdefault("APP_SECRET_KEY", "test-secret-key-for-session-tokens-only")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id.apps.googleusercontent.com")
+os.environ["ENV"] = "dev"
+#  การทดสอบต้องไม่ส่งอีเมลจริงเด็ดขาด แม้เครื่องจะตั้ง SMTP ไว้
+os.environ["APP_SMTP_USER"] = ""
+os.environ["APP_SMTP_PASSWORD"] = ""
 os.environ.setdefault("UPLOAD_DIR", os.path.join(os.path.dirname(__file__), ".uploads"))
+
+
+def _use_in_memory_vector_store() -> None:
+    """Qdrant ในหน่วยความจำ + embedder ปลอม — test ไม่ต้องโหลดโมเดล (~220 MB) หรือมี Qdrant server"""
+    from qdrant_client import QdrantClient
+
+    from app.services import vector_store
+    from tests.fakes import HashEmbedder
+
+    vector_store.configure(QdrantClient(":memory:"), HashEmbedder())
+
+
+_use_in_memory_vector_store()

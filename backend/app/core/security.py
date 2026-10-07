@@ -1,73 +1,65 @@
 """
-โทเคนสำหรับ magic link (FR-M7-08)
+Session JWT และการตรวจ Google ID token
 
-ผู้รับผิดชอบมติต้องแจ้งสถานะกลับได้โดยไม่ต้องล็อกอิน
-โทเคนจึงเซ็นด้วย HMAC-SHA256 (stdlib) ผูกกับ resolution + person + วันหมดอายุ
-แก้ค่าใดค่าหนึ่งในลิงก์แล้วลายเซ็นจะไม่ผ่านทันที
-
-ขอบเขตของโทเคนนี้คือ "อัปเดตสถานะมติข้อเดียว" เท่านั้น ไม่ใช่การล็อกอินเข้าระบบ
+⚠ ห้ามเพิ่มทางลัดที่ข้ามการตรวจลายเซ็นของ Google (mock token, ถอด payload เอง ฯลฯ)
+   ถ้าต้องการ login ตอนพัฒนา ให้ใช้ /auth/demo ซึ่งถูกปิดอัตโนมัติเมื่อ ENV=prod
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
-import time
-from uuid import UUID
+from datetime import datetime, timedelta, timezone
+
+import jwt
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 
 from app.core.config import settings
 
-
-def _b64e(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-
-def _b64d(text: str) -> bytes:
-    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+JWT_ALGORITHM = "HS256"
+GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 
 
-def _sign(payload: bytes) -> str:
-    return _b64e(hmac.new(settings.SECRET_KEY.encode(), payload, hashlib.sha256).digest())
+class InvalidGoogleToken(ValueError):
+    pass
 
 
-def make_magic_token(resolution_id: UUID, person_id: UUID, ttl_days: int | None = None) -> str:
-    ttl = ttl_days if ttl_days is not None else settings.MAGIC_LINK_TTL_DAYS
-    payload = json.dumps(
-        {
-            "r": str(resolution_id),
-            "p": str(person_id),
-            "exp": int(time.time()) + ttl * 86400,
-        },
-        separators=(",", ":"),
-    ).encode()
-    return f"{_b64e(payload)}.{_sign(payload)}"
+def create_access_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "iat": now,
+        "exp": now + timedelta(hours=settings.SESSION_EXPIRE_HOURS),
+    }
+    return jwt.encode(payload, settings.APP_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
-def read_magic_token(token: str) -> dict | None:
-    """คืน payload ถ้าลายเซ็นถูกและยังไม่หมดอายุ ไม่งั้นคืน None"""
+def read_access_token(token: str) -> str | None:
+    """คืน user id ถ้า token ถูกต้องและยังไม่หมดอายุ"""
     try:
-        body, signature = token.split(".", 1)
-        payload = _b64d(body)
-    except (ValueError, TypeError):
+        payload = jwt.decode(
+            token, settings.APP_SECRET_KEY, algorithms=[JWT_ALGORITHM], options={"require": ["sub", "exp"]}
+        )
+    except jwt.PyJWTError:
         return None
+    return str(payload["sub"])
 
-    if not hmac.compare_digest(_sign(payload), signature):
-        return None
+
+def verify_google_token(token: str) -> dict:
+    """ตรวจลายเซ็น, audience (GOOGLE_CLIENT_ID ของเราเท่านั้น), issuer และอีเมลที่ยืนยันแล้ว"""
+    if not settings.GOOGLE_CLIENT_ID:
+        raise InvalidGoogleToken("เซิร์ฟเวอร์ยังไม่ได้ตั้ง GOOGLE_CLIENT_ID")
+    if not token or not token.strip():
+        raise InvalidGoogleToken("ไม่ได้ส่ง Google ID token มา")
 
     try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        return None
+        info = google_id_token.verify_oauth2_token(
+            token, google_requests.Request(), settings.GOOGLE_CLIENT_ID
+        )
+    except ValueError as err:
+        raise InvalidGoogleToken(str(err)) from err
 
-    if int(data.get("exp", 0)) < time.time():
-        return None
-    return data
-
-
-def magic_link_url(resolution_id: UUID, person_id: UUID) -> str:
-    #  router ทุกตัวถูก mount ใต้ API_V1_STR — ลิงก์ต้องมี prefix นี้ ไม่งั้นอีเมลพาไป 404
-    token = make_magic_token(resolution_id, person_id)
-    base = settings.PUBLIC_BASE_URL.rstrip("/")
-    return f"{base}{settings.API_V1_STR}/public/resolutions/{token}"
+    if info.get("iss") not in GOOGLE_ISSUERS:
+        raise InvalidGoogleToken("issuer ไม่ใช่ Google")
+    if not info.get("email") or not info.get("email_verified"):
+        raise InvalidGoogleToken("บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล")
+    return info

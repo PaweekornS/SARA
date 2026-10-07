@@ -235,6 +235,21 @@ def _transcribe_one(file_path: str, offset_ms: int) -> Transcript:
     return Transcript(segments=[], has_speaker_labels=False)
 
 
+def _normalize_speaker_label(raw_label: str | None, default_idx: int = 0) -> str:
+    """แปลง speaker label ให้เป็นรูปแบบมาตรฐานสากล 'Speaker 1', 'Speaker 2', ..."""
+    if not raw_label:
+        return f"Speaker {default_idx + 1}"
+    label = str(raw_label).strip()
+    match = re.search(r"(?:speaker[_\s]*)(\d+)", label, re.IGNORECASE)
+    if match:
+        num = int(match.group(1))
+        # ถ้าเป็น SPEAKER_00 ให้แสดงเป็น Speaker 1
+        return f"Speaker {num + 1 if '00' in label else num or 1}"
+    if label.startswith("Speaker"):
+        return label
+    return label
+
+
 def _from_verbose(raw, offset_ms: int) -> Transcript:
     """แปลงผล verbose_json เป็น segment — รองรับกรณี API แนบ speaker มาให้ด้วย"""
     raw_segments = getattr(raw, "segments", None) or []
@@ -246,20 +261,29 @@ def _from_verbose(raw, offset_ms: int) -> Transcript:
 
     segments: list[Segment] = []
     has_speakers = False
+    speaker_map: dict[str, str] = {}
+
     for item in raw_segments:
         data = item if isinstance(item, dict) else getattr(item, "model_dump", lambda: {})()
         text = (data.get("text") or "").strip()
         if not text:
             continue
-        speaker = data.get("speaker") or data.get("speaker_label")
-        if speaker:
+        raw_spk = data.get("speaker") or data.get("speaker_label")
+        if raw_spk:
             has_speakers = True
+            raw_spk_str = str(raw_spk)
+            if raw_spk_str not in speaker_map:
+                speaker_map[raw_spk_str] = f"Speaker {len(speaker_map) + 1}"
+            normalized_spk = speaker_map[raw_spk_str]
+        else:
+            normalized_spk = "Speaker 1"
+
         segments.append(
             Segment(
                 text=text,
                 start_ms=offset_ms + int(float(data.get("start", 0)) * 1000),
                 end_ms=offset_ms + int(float(data.get("end", 0)) * 1000),
-                speaker_label=str(speaker) if speaker else "SPEAKER_00",
+                speaker_label=normalized_spk,
                 confidence=_confidence_of(data),
             )
         )
@@ -281,20 +305,38 @@ def _confidence_of(data: dict) -> float:
 def _split_sentences(text: str, offset_ms: int) -> list[Segment]:
     """
     ตัดข้อความจริงเป็นท่อน ๆ เมื่อ ASR ไม่ให้ timestamp มา
-    timestamp ที่ได้เป็นค่าประมาณตามสัดส่วนความยาวข้อความ ไม่ใช่ค่าที่วัดจากเสียงจริง
-    (ยังเป็นข้อความจริงทุกตัวอักษร — ไม่ใช่การแต่งข้อมูลขึ้นมา)
+    สกัด speaker tag แบบ [Speaker 1]: ... หรือ Speaker 1: ... ถ้ามี
     """
     parts = [p.strip() for p in _SENTENCE_SPLIT.split(text) if p and p.strip()]
     if not parts:
         parts = [text]
 
-    # ประมาณอัตราการพูดภาษาไทยที่ ~12 ตัวอักษร/วินาที
     chars_per_ms = 12 / 1000
     segments: list[Segment] = []
     cursor = offset_ms
+    current_speaker = "Speaker 1"
+    speaker_idx_map: dict[str, str] = {}
+
     for part in parts:
-        duration = max(1500, int(len(part) / chars_per_ms))
-        segments.append(Segment(text=part, start_ms=cursor, end_ms=cursor + duration))
+        clean_text = part
+        # ตรวจจับโครงสร้าง [Speaker N]: หรือ Speaker N:
+        spk_match = re.match(r"^\[?(Speaker\s*\d+|SPEAKER_\d+|ผู้พูด\s*\d+)\]?[:\s-]+(.*)$", part, re.IGNORECASE)
+        if spk_match:
+            raw_s = spk_match.group(1).strip()
+            if raw_s not in speaker_idx_map:
+                speaker_idx_map[raw_s] = f"Speaker {len(speaker_idx_map) + 1}"
+            current_speaker = speaker_idx_map[raw_s]
+            clean_text = spk_match.group(2).strip() or part
+
+        duration = max(1500, int(len(clean_text) / chars_per_ms))
+        segments.append(
+            Segment(
+                text=clean_text,
+                start_ms=cursor,
+                end_ms=cursor + duration,
+                speaker_label=current_speaker,
+            )
+        )
         cursor += duration
     return segments
 
@@ -326,7 +368,7 @@ def _split_audio(file_path: str, chunk_seconds: int = CHUNK_SECONDS) -> list[str
 
 
 def load_transcript_file(file_path: str) -> Transcript:
-    """FR-M2-02 อัปโหลด transcript ที่มีอยู่แล้วเพื่อข้ามขั้น ASR"""
+    """FR-M2-02 & v3.0.0: อัปโหลดเอกสาร transcript (.txt, .md, .docx, .pdf) เพื่อสรุปเนื้อหา"""
     ext = os.path.splitext(file_path)[1].lower()
     if ext in (".txt", ".md"):
         with open(file_path, encoding="utf-8", errors="replace") as fh:
@@ -337,9 +379,17 @@ def load_transcript_file(file_path: str) -> Transcript:
         except ImportError as err:  # pragma: no cover
             raise AsrError("อ่านไฟล์ .docx ไม่ได้เพราะยังไม่ได้ติดตั้ง python-docx") from err
         text = "\n".join(p.text for p in Document(file_path).paragraphs).strip()
+    elif ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(file_path)
+            pages_text = [page.extract_text() or "" for page in reader.pages]
+            text = "\n".join(pages_text).strip()
+        except Exception as err:
+            raise AsrError(f"อ่านไฟล์ PDF ไม่สำเร็จ: {err}") from err
     else:
-        raise AsrError(f"ยังไม่รองรับไฟล์ transcript นามสกุล {ext}")
+        raise AsrError(f"ยังไม่รองรับไฟล์เอกสารนามสกุล {ext}")
 
     if not text:
-        raise AsrError("ไฟล์ transcript ว่างเปล่า")
+        raise AsrError("ไฟล์เอกสารหรือ transcript ว่างเปล่า")
     return Transcript(segments=_split_sentences(text, 0), has_speaker_labels=False)

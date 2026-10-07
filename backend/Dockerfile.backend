@@ -1,29 +1,26 @@
-# Use a lightweight, official Python 3.11 image
 FROM python:3.11-slim
 
-# Prevent Python from writing .pyc files and enable unbuffered output for real-time logs
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 \
+    EMBEDDING_CACHE_DIR=/opt/models
 
 WORKDIR /app
 
-# Install system dependencies (build tools, PostgreSQL client libraries, and ffmpeg)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    curl \
-    ffmpeg \
+# ffmpeg ใช้แบ่ง/แปลงไฟล์เสียงก่อนส่ง ASR · curl ใช้ใน healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install dependencies first (takes advantage of Docker layer caching)
+# dependency ก่อนโค้ด เพื่อให้ build ซ้ำใช้ cache ได้ (job deploy มีเวลา 20 นาที)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application source code
+# ฝังโมเดล embedding ไว้ใน image — container จะได้ไม่ต้องโหลด ~220 MB ทุกครั้งที่เริ่ม
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('${EMBEDDING_MODEL}', cache_dir='${EMBEDDING_CACHE_DIR}')"
+
 COPY . .
 
-# Expose FastAPI default port
 EXPOSE 8000
 
-# Default command (will be overridden in docker-compose for workers & MCP server)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

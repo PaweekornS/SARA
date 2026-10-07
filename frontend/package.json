@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check": "node --experimental-strip-types --test lib/domain.test.ts"
+    "check": "node --experimental-strip-types --test lib/format.test.ts"
   },
   "dependencies": {
     "lucide-react": "^1.27.0",

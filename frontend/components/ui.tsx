@@ -2,9 +2,11 @@
 
 /** ชิ้นส่วน UI พื้นฐานที่ทั้งแอปใช้ร่วมกัน — ไม่มี dependency นอกจาก Tailwind + lucide */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { AlertTriangle, X } from "lucide-react";
-import type { ResolutionStatus } from "@/lib/types";
+
+const noopSubscribe = () => () => {};
 
 export function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
@@ -85,47 +87,6 @@ export function CardHead({
   );
 }
 
-/* ── สถานะมติ ─────────────────────────────────────────────────────────── */
-
-const STATUS_STYLE: Record<ResolutionStatus, { bg: string; fg: string }> = {
-  proposed: { bg: "var(--st-proposed-bg)", fg: "var(--st-proposed)" },
-  confirmed: { bg: "var(--st-confirmed-bg)", fg: "var(--st-confirmed)" },
-  in_progress: { bg: "var(--st-progress-bg)", fg: "var(--st-progress)" },
-  blocked: { bg: "var(--st-blocked-bg)", fg: "var(--st-blocked)" },
-  done: { bg: "var(--st-done-bg)", fg: "var(--st-done)" },
-  cancelled: { bg: "var(--st-cancelled-bg)", fg: "var(--st-cancelled)" },
-  superseded: { bg: "var(--st-superseded-bg)", fg: "var(--st-superseded)" },
-};
-
-/** สีจุดสถานะ ใช้ตอนต้องการแค่จุดเดียวไม่ใช่ป้ายเต็ม */
-export function statusColor(status: ResolutionStatus) {
-  return STATUS_STYLE[status].fg;
-}
-
-export function StatusPill({
-  status,
-  label,
-  size = "md",
-}: {
-  status: ResolutionStatus;
-  label: string;
-  size?: "sm" | "md";
-}) {
-  const s = STATUS_STYLE[status];
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full font-medium whitespace-nowrap",
-        size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-[12px]",
-      )}
-      style={{ background: s.bg, color: s.fg }}
-    >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.fg }} />
-      {label}
-    </span>
-  );
-}
-
 export function Badge({
   children,
   tone = "neutral",
@@ -163,15 +124,20 @@ export function Field({
   hint,
   children,
   className,
+  required,
 }: {
   label: string;
   hint?: string;
   children: React.ReactNode;
   className?: string;
+  required?: boolean;
 }) {
   return (
     <label className={cn("block", className)}>
-      <span className="mb-1.5 block text-[13px] font-medium text-ink-2">{label}</span>
+      <span className="mb-1.5 block text-[13px] font-medium text-ink-2">
+        {label}
+        {required && <span className="ml-1 text-[var(--danger)]">*</span>}
+      </span>
       {children}
       {hint && <span className="mt-1 block text-[12px] text-ink-3">{hint}</span>}
     </label>
@@ -214,6 +180,8 @@ export function Modal({
   width?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  //  createPortal ต้องมี document — true เฉพาะฝั่ง browser
+  const mounted = useSyncExternalStore(noopSubscribe, () => true, () => false);
 
   useEffect(() => {
     if (!open) return;
@@ -227,10 +195,15 @@ export function Modal({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
-      <div className="fixed inset-0 bg-[rgba(10,15,25,0.45)] backdrop-blur-[2px]" onClick={onClose} />
+  if (!open || !mounted) return null;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto p-4 sm:p-6 animate-in fade-in duration-200">
+      <div
+        className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm transition-opacity"
+        onClick={onClose}
+        aria-hidden="true"
+      />
       <div
         ref={ref}
         tabIndex={-1}
@@ -238,11 +211,11 @@ export function Modal({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "fade-up relative z-10 w-full rounded-xl border border-line bg-surface shadow-[var(--shadow-3)] outline-none",
+          "fade-up relative z-10 w-full max-h-[90vh] flex flex-col rounded-xl border border-line bg-[var(--bg-surface)] shadow-[var(--shadow-3)] outline-none overflow-hidden",
           width,
         )}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-line px-5 py-4 bg-[var(--bg-surface)]">
           <div>
             <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
             {desc && <p className="mt-1 text-[13px] text-ink-3">{desc}</p>}
@@ -255,10 +228,15 @@ export function Modal({
             <X size={16} />
           </button>
         </div>
-        <div className="px-5 py-4">{children}</div>
-        {footer && <div className="flex justify-end gap-2 border-t border-line px-5 py-3.5">{footer}</div>}
+        <div className="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+        {footer && (
+          <div className="flex shrink-0 justify-end gap-2 border-t border-line px-5 py-3.5 bg-[var(--bg-surface)]">
+            {footer}
+          </div>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -274,14 +252,16 @@ export function ConfirmModal({
   title,
   confirmLabel,
   cancelLabel = "ยกเลิก",
+  destructive = true,
   children,
 }: {
   open: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   title: string;
   confirmLabel: string;
   cancelLabel?: string;
+  destructive?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -438,6 +418,31 @@ export function Segmented<T extends string>({
           {o.count !== undefined && <span className="tnum ml-1.5 text-[11px] text-ink-4">{o.count}</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+/* ── สถานะการโหลดข้อมูล ──────────────────────────────────────────────── */
+
+export function ErrorNote({ error, onRetry }: { error: Error | string; onRetry?: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius)] bg-[var(--danger-bg)] px-3.5 py-2.5 text-[13px] text-[var(--danger)]">
+      <AlertTriangle size={15} className="shrink-0" />
+      <span className="min-w-0 flex-1">{typeof error === "string" ? error : error.message}</span>
+      {onRetry && (
+        <button onClick={onRetry} className="rounded border border-current px-2.5 py-1 text-[12px] font-medium cursor-pointer">
+          ลองใหม่
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function Loading({ label = "กำลังโหลด…" }: { label?: string }) {
+  return (
+    <div className="flex items-center justify-center gap-2 py-14 text-[13px] text-ink-3">
+      <span className="h-4 w-4 animate-spin rounded-full border-2 border-line border-t-brand" />
+      {label}
     </div>
   );
 }

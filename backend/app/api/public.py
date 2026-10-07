@@ -1,134 +1,98 @@
 """
-FR-M7-08 — ผู้รับผิดชอบแจ้งสถานะมติกลับได้โดยไม่ต้องล็อกอิน (magic link)
+API ที่ไม่ต้องเข้าสู่ระบบ — ให้คนทั่วไปลองสรุปไฟล์ได้ทันทีโดยไม่บันทึกอะไรลง DB
 
-ขอบเขตของลิงก์: อัปเดตมติข้อเดียวที่ระบุในโทเคนเท่านั้น
-เปลี่ยนไป done ไม่ได้จากทางนี้ — การปิดมติต้องผ่านฝ่ายเลขานุการเสมอ (§4.2)
+จำกัดโควตาต่อ IP ใน Redis และไม่มีการส่งอีเมลจากทางนี้
+(ถ้า deploy หลัง reverse proxy ต้องรัน uvicorn ด้วย --proxy-headers ไม่งั้นทุกคนจะได้ IP ของ proxy)
 """
 
 from __future__ import annotations
 
-from html import escape
-from uuid import UUID
+import asyncio
+import logging
+import os
+import tempfile
 
-from fastapi import APIRouter, Depends, Form, HTTPException
-from fastapi.responses import HTMLResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 
 from app.core.config import settings
-from app.core.security import read_magic_token
-from app.db.models import Person, Resolution, ResolutionStatus
-from app.db.session import get_db
-from app.services.agenda_builder import STATUS_LABEL_TH
-from app.services.resolutions import change_status, overdue_days
-from app.services.thai_format import thai_date
+from app.services.asr import (
+    AsrError,
+    Transcript,
+    load_transcript_file,
+    transcribe_audio,
+)
+from app.services.extraction import SegmentView, summarize
+from app.services.llm import LlmError
+from app.services.ratelimit import enforce
+from app.services.storage import source_kind_of
+from app.services.templates import get_template, list_templates
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/public", tags=["Public"])
 
-#  ผู้รับผิดชอบรายงานได้แค่ 2 อย่างนี้ — "เสร็จแล้ว" ต้องให้เลขาฯ ยืนยันจากที่ประชุม
-ALLOWED = {
-    ResolutionStatus.IN_PROGRESS: "กำลังดำเนินการ",
-    ResolutionStatus.BLOCKED: "ติดปัญหา ยังดำเนินการต่อไม่ได้",
-}
-
-PAGE = """<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>แจ้งความคืบหน้ามติ · SARA</title>
-<style>
- body {{ font-family: "IBM Plex Sans Thai", Tahoma, sans-serif; background:#f4f5f7; color:#131a26;
-        margin:0; padding:24px; line-height:1.7; }}
- .card {{ max-width:640px; margin:24px auto; background:#fff; border:1px solid #dfe3ea;
-         border-radius:10px; padding:24px; }}
- .quote {{ border-left:3px solid #9a7517; background:#fbf3df; padding:12px 16px; margin:16px 0; }}
- .meta {{ color:#6b7688; font-size:14px; }}
- button {{ background:#1e3a6e; color:#fff; border:0; border-radius:8px; padding:10px 18px;
-          font-size:15px; cursor:pointer; margin-right:8px; font-family:inherit; }}
- .ok {{ color:#196b45; font-weight:600; }}
- .err {{ color:#b3261e; font-weight:600; }}
- textarea {{ width:100%; min-height:80px; border:1px solid #c8cfda; border-radius:8px;
-            padding:10px; font-family:inherit; font-size:15px; }}
-</style></head><body><div class="card">{content}</div></body></html>"""
+MAX_PUBLIC_UPLOAD_MB = 25
 
 
-def _page(content: str, status_code: int = 200) -> HTMLResponse:
-    return HTMLResponse(PAGE.format(content=content), status_code=status_code)
+@router.get("/templates")
+async def templates():
+    return list_templates()
 
 
-def esc(value) -> str:
-    """
-    ข้อความมติและชื่อบุคคลแก้ไขได้จากในระบบ จึงเป็นข้อมูลที่เชื่อไม่ได้เมื่อเอามาต่อเป็น HTML
-    หน้านี้เปิดจากอีเมลโดยไม่ต้องล็อกอิน สคริปต์ที่หลุดเข้ามาจะรันในเบราว์เซอร์ของผู้รับทันที
-    """
-    return escape(str(value), quote=True)
+def _process(path: str, kind: str, template: str, title: str) -> tuple[Transcript, object]:
+    transcript = transcribe_audio(path) if kind == "audio" else load_transcript_file(path)
+    if not transcript.segments:
+        raise AsrError("ไม่พบเสียงพูดหรือข้อความในไฟล์")
+    views = [SegmentView(index=i, speaker_label=s.speaker_label, text=s.text) for i, s in enumerate(transcript.segments)]
+    return transcript, summarize(views, template, title)
 
 
-async def _load(token: str, db: AsyncSession) -> tuple[Resolution, Person]:
-    data = read_magic_token(token)
-    if not data:
-        raise HTTPException(status_code=403, detail="ลิงก์ไม่ถูกต้องหรือหมดอายุแล้ว")
-    resolution = await db.get(Resolution, UUID(data["r"]))
-    person = await db.get(Person, UUID(data["p"]))
-    if resolution is None or person is None:
-        raise HTTPException(status_code=404, detail="ไม่พบมติหรือผู้รับผิดชอบตามลิงก์นี้")
-    return resolution, person
-
-
-@router.get("/resolutions/{token}", response_class=HTMLResponse)
-async def show(token: str, db: AsyncSession = Depends(get_db)):
-    try:
-        resolution, person = await _load(token, db)
-    except HTTPException as err:
-        return _page(f'<p class="err">{esc(err.detail)}</p>', err.status_code)
-
-    od = overdue_days(resolution)
-    buttons = "".join(
-        f'<button type="submit" name="status" value="{key}">{esc(label)}</button>'
-        for key, label in ALLOWED.items()
-    )
-    return _page(
-        f"<h2>แจ้งความคืบหน้ามติ</h2>"
-        f'<p class="meta">เรียน {esc(person.full_name)}</p>'
-        f'<div class="quote">{esc(resolution.text)}</div>'
-        f'<p class="meta">{esc(resolution.ref_no)} · กำหนดแล้วเสร็จ {esc(thai_date(resolution.due_date))}'
-        f'{f" · เกินกำหนดแล้ว {od} วัน" if od else ""}<br/>'
-        f"สถานะปัจจุบัน: {esc(STATUS_LABEL_TH.get(resolution.status, resolution.status))}</p>"
-        f'<form method="post" action="{settings.API_V1_STR}/public/resolutions/{esc(token)}">'
-        f'<p><textarea name="note" placeholder="รายละเอียดความคืบหน้า (ไม่บังคับ)"></textarea></p>'
-        f"<p>{buttons}</p></form>"
-        f'<p class="meta">หากดำเนินการแล้วเสร็จ กรุณาแจ้งฝ่ายเลขานุการ '
-        f"เนื่องจากการปิดมติต้องได้รับการยืนยันจากที่ประชุม</p>"
-    )
-
-
-@router.post("/resolutions/{token}", response_class=HTMLResponse)
-async def submit(
-    token: str,
-    status: str = Form(...),
-    note: str = Form(default=""),
-    db: AsyncSession = Depends(get_db),
+@router.post("/summarize")
+async def summarize_file(
+    request: Request,
+    file: UploadFile = File(..., description="ไฟล์เสียง (.mp3 .m4a .wav ...) หรือเอกสาร (.txt .docx .pdf .md)"),
+    template: str = Form("general"),
 ):
-    try:
-        resolution, person = await _load(token, db)
-    except HTTPException as err:
-        return _page(f'<p class="err">{esc(err.detail)}</p>', err.status_code)
-
-    if status not in ALLOWED:
-        return _page('<p class="err">สถานะที่เลือกไม่ถูกต้อง</p>', 422)
-
-    try:
-        await change_status(
-            db,
-            resolution,
-            status,
-            reason=note.strip() or f"ผู้รับผิดชอบแจ้งสถานะผ่านลิงก์: {ALLOWED[status]}",
-            actor=f"{person.full_name} (ผ่าน magic link)",
-        )
-    except HTTPException as err:
-        return _page(f'<p class="err">{esc(err.detail)}</p>', err.status_code)
-
-    await db.commit()
-    return _page(
-        f'<h2 class="ok">บันทึกเรียบร้อยแล้ว</h2>'
-        f"<p>ระบบบันทึกสถานะ “{esc(ALLOWED[status])}” สำหรับ {esc(resolution.ref_no)} แล้ว "
-        f"ฝ่ายเลขานุการจะเห็นการแจ้งนี้ในระบบทันที</p>"
-        f'<p class="meta">ขอบคุณครับ/ค่ะ</p>'
+    client_ip = request.client.host if request.client else "unknown"
+    enforce(
+        f"public:{client_ip}", 1, settings.PUBLIC_SUMMARIZE_PER_HOUR, 3600,
+        "ใช้งานแบบไม่เข้าสู่ระบบครบโควตาชั่วโมงนี้แล้ว — เข้าสู่ระบบเพื่อใช้งานต่อและบันทึกผลไว้ได้",
     )
+    kind = source_kind_of(file.filename or "")
+    tmpl = get_template(template)
+
+    content = await file.read(MAX_PUBLIC_UPLOAD_MB * 1024 * 1024 + 1)
+    if len(content) > MAX_PUBLIC_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"แบบไม่เข้าสู่ระบบรับไฟล์ได้ไม่เกิน {MAX_PUBLIC_UPLOAD_MB} MB")
+    if not content:
+        raise HTTPException(status_code=422, detail="ไฟล์ที่อัปโหลดว่างเปล่า")
+
+    suffix = os.path.splitext(file.filename or "")[1].lower()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        path = tmp.name
+
+    try:
+        #  ASR และ LLM เป็นงาน blocking ยาวหลายนาที ห้ามรันบน event loop ตรง ๆ
+        transcript, result = await asyncio.to_thread(_process, path, kind, tmpl["id"], file.filename or "")
+    except (AsrError, LlmError) as err:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(err)) from err
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    return {
+        "template": {"id": tmpl["id"], "name": tmpl["name"], "detail_labels": tmpl["detail_labels"]},
+        "summary": result.summary,
+        "key_points": result.key_points,
+        "details": result.details,
+        "action_items": [
+            {"text": a.text, "owner": a.owner, "due_date": a.due_date} for a in result.action_items
+        ],
+        "transcript": [
+            {"speaker": s.speaker_label, "start_ms": s.start_ms, "end_ms": s.end_ms, "text": s.text}
+            for s in transcript.segments
+        ],
+    }

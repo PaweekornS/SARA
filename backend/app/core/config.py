@@ -4,14 +4,22 @@ Application Configuration Settings
 
 from __future__ import annotations
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+INSECURE_SECRET = "change-me-in-production"
 
 
 # ── Configuration Class ──────────────────────────────────────────────────────
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "SARA · ระบบสารบรรณการประชุมอัตโนมัติ"
-    API_V1_STR: str = "/api"
+    PROJECT_NAME: str = "SARA · ผู้ช่วยสรุปการประชุม"
+    # reverse proxy ของ server ตัด /api ออกก่อนส่งเข้ามา route จึงอยู่ที่ root
+    # ROOT_PATH=/api บอก FastAPI ให้ /docs และ openapi.json สร้างลิงก์ถูก (ดู docs/RULES.md ข้อ 7)
+    ROOT_PATH: str = ""
+
+    # dev | prod — prod ปิดทางลัดสำหรับนักพัฒนาทั้งหมด (demo login, mock token)
+    ENV: str = "dev"
 
     DATABASE_URL: str
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -26,37 +34,71 @@ class Settings(BaseSettings):
     LLM_CONTEXT_TOKENS: int = 40960
     LLM_RESPONSE_RESERVE_TOKENS: int = 4096
 
+    # Qdrant + embedding สำหรับถาม-ตอบ (รันบน CPU)
+    QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_COLLECTION: str = "sara_chunks"
+    EMBEDDING_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    EMBEDDING_CACHE_DIR: str = ""
+    VECTOR_MIN_SCORE: float = 0.3
+
     # ASR
     ASR_URL: str = "https://tokenmind.pathumma.in.th"
     ASR_MODEL: str = "ptm-asr-1"
 
-    # API Security
-    API_KEY: str = ""
+    # ตัวแปรที่ขึ้นต้นด้วย APP_ คือความลับ — บน GitLab ผูกกับ CI variable
+
+    # Auth — Google Sign-In เป็นช่องทางเดียวที่ใช้ได้บน prod
+    GOOGLE_CLIENT_ID: str = ""
+    APP_SECRET_KEY: str = INSECURE_SECRET
+    SESSION_EXPIRE_HOURS: int = 72
+    SESSION_COOKIE_SECURE: bool = False
+    ALLOW_DEMO_LOGIN: bool = False
+
+    # SMTP
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    APP_SMTP_USER: str = ""
+    APP_SMTP_PASSWORD: str = ""
+
+    # โควตากันใช้ผิดวัตถุประสงค์ (นับใน Redis)
+    PUBLIC_SUMMARIZE_PER_HOUR: int = 10
+    EMAIL_RECIPIENTS_PER_DAY: int = 50
+    MAX_EMAIL_RECIPIENTS: int = 10
 
     # ไฟล์อัปโหลด — ใช้ shared volume ระหว่าง API และ Celery Workers
     UPLOAD_DIR: str = "/data/uploads"
     MAX_UPLOAD_MB: int = 500
 
-    # เอกสารต้นแบบขององค์กร ถ้ามีไฟล์อยู่ ระบบจะสร้าง .docx จากไฟล์นี้แทนเอกสารเปล่า
-    AGENDA_TEMPLATE_PATH: str = ""
-    MINUTES_TEMPLATE_PATH: str = ""
+    # worker — งานเกินเวลานี้ถูกตัดทิ้ง และงานที่ค้างเกิน limit + 15 นาทีจะถูกตั้งเป็น failed
+    MEETING_TIME_LIMIT_MINUTES: int = 60
+    MAX_PROCESSING_ATTEMPTS: int = 2
 
-    # การแจ้งเตือนมติ
-    REMINDER_LEAD_DAYS: int = 7
-    REMINDER_COOLDOWN_DAYS: int = 7
     TIMEZONE: str = "Asia/Bangkok"
-
-    # magic link ให้ผู้รับผิดชอบแจ้งสถานะกลับโดยไม่ต้องล็อกอิน
-    SECRET_KEY: str = "change-me-in-production"
-    MAGIC_LINK_TTL_DAYS: int = 30
-    PUBLIC_BASE_URL: str = "http://localhost:8000"
-
-    # ยังไม่มีระบบล็อกอิน — ใช้ชื่อนี้เป็นผู้กระทำเมื่อไม่ได้ส่งหัวข้อ X-Actor มา
-    DEFAULT_ACTOR: str = "ฝ่ายเลขานุการ"
 
     CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @model_validator(mode="after")
+    def _refuse_insecure_prod(self) -> "Settings":
+        if self.is_prod:
+            if self.APP_SECRET_KEY == INSECURE_SECRET or len(self.APP_SECRET_KEY) < 32:
+                raise ValueError("ENV=prod ต้องตั้ง APP_SECRET_KEY แบบสุ่มยาวอย่างน้อย 32 ตัวอักษร")
+            if not self.GOOGLE_CLIENT_ID:
+                raise ValueError("ENV=prod ต้องตั้ง GOOGLE_CLIENT_ID")
+        return self
+
+    @property
+    def is_prod(self) -> bool:
+        return self.ENV.lower() == "prod"
+
+    @property
+    def demo_login_enabled(self) -> bool:
+        return not self.is_prod or self.ALLOW_DEMO_LOGIN
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.APP_SMTP_USER and self.APP_SMTP_PASSWORD)
 
     @property
     def cors_origin_list(self) -> list[str]:

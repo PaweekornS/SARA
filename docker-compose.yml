@@ -1,0 +1,153 @@
+name: ${TEAM:-sara}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+x-common: &common
+  restart: unless-stopped
+  logging: *logging
+  networks: [app]
+
+x-backend: &backend
+  <<: *common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.backend
+  env_file:
+    - .env
+  environment:
+    ENV: ${ENV:-prod}
+    DATABASE_URL: postgresql+asyncpg://postgres:${APP_POSTGRES_PASSWORD:?APP_POSTGRES_PASSWORD is required}@db:5432/sara
+    REDIS_URL: redis://redis:6379/0
+    QDRANT_URL: http://qdrant:6333
+    UPLOAD_DIR: /data/uploads
+    ROOT_PATH: ${ROOT_PATH-/api}
+    GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+    CORS_ORIGINS: ${CORS_ORIGINS:-https://${TEAM:-sara}.aiforthai.in.th}
+  volumes:
+    - /data/hack/${TEAM:-sara}/uploads:/data/uploads
+
+services:
+  # ---------------------------------
+  # Next.js frontend
+  # ---------------------------------
+  frontend:
+    <<: *common
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+      args:
+        API_PROXY_TARGET: http://api:8000
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    ports:
+      - "127.0.0.1:${BASE:-20130}:3000"
+    environment:
+      NODE_ENV: production
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ---------------------------------
+  # FastAPI — migration + seed (seed ข้ามเองเมื่อ ENV=prod) แล้วค่อยเปิด server
+  # ---------------------------------
+  api:
+    <<: *backend
+    command: >
+      sh -c "alembic upgrade head && (python -m app.seed || true) &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=*"
+    ports:
+      - "127.0.0.1:${BASE_1:-20131}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "3.0"
+
+  # ---------------------------------
+  # Celery worker (ASR · สรุป · ทำดัชนี · ตรวจงานค้าง)
+  # -B ฝัง scheduler (sweep งานค้างทุก 10 นาที) ไว้ใน worker — ถ้า scale เป็นหลาย worker ให้แยก beat ออกเป็น service ของตัวเอง
+  # --concurrency=2 กันยิง ASR/LLM ของ AI4Thai พร้อมกันเกินโควตา
+  # ---------------------------------
+  worker:
+    <<: *backend
+    command: celery -A app.workers.tasks.celery_app worker -B --concurrency=2 --loglevel=info --schedule=/tmp/celerybeat-schedule
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "2.0"
+
+  db:
+    <<: *common
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD:?APP_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: sara
+    volumes:
+      - /data/hack/${TEAM:-sara}/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sara"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+  redis:
+    <<: *common
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  qdrant:
+    <<: *common
+    image: qdrant/qdrant:v1.19.2
+    volumes:
+      - /data/hack/${TEAM:-sara}/qdrant:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+
+networks:
+  app:
+    driver: bridge

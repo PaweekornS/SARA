@@ -1,443 +1,156 @@
-"""
-Pydantic DTO — ชื่อฟิลด์ตรงกับ frontend/lib/types.ts แบบ 1:1
-ตั้งใจไม่แปลงเป็น camelCase เพื่อให้ตาราง SQL, API และหน้าจอใช้คำเดียวกันทั้งระบบ
-"""
+"""รูปร่างข้อมูลขาเข้า-ขาออกของ API"""
+
+from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-#  TimelineEntry มีฟิลด์ชื่อ "date" ซึ่งบังชื่อ type date ในขอบเขตของคลาส
-#  จน pydantic ตีความ annotation เพี้ยนไปเป็น None เท่านั้น — ใช้ชื่อสำรองแทน
-DateOnly = date
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
-class ORMModel(BaseModel):
+class OrmModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── องค์กร / บุคคล ──────────────────────────────────────────────────────
+# ── Auth ────────────────────────────────────────────────────────────────
 
-class OrganizationOut(ORMModel):
+class GoogleLoginIn(BaseModel):
+    id_token: str
+
+
+class DemoLoginIn(BaseModel):
+    name: str = Field(default="ผู้ใช้ทดลอง", max_length=80)
+
+
+class UserOut(OrmModel):
+    id: UUID
+    email: str
+    name: str
+    picture: str = ""
+    provider: str
+
+
+class AuthOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+# ── Collection ──────────────────────────────────────────────────────────
+
+class CollectionIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2000)
+    default_template: str = "general"
+
+
+class CollectionPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=2000)
+    default_template: str | None = None
+
+
+class CollectionOut(OrmModel):
     id: UUID
     name: str
-
-
-class PersonIn(BaseModel):
-    full_name: str
-    position: str = ""
-    department: str = ""
-    email: str = ""
-    is_active: bool = True
-    is_department: bool = False
-
-
-class PersonOut(ORMModel):
-    id: UUID
-    org_id: UUID
-    full_name: str
-    position: str = ""
-    department: str = ""
-    email: str = ""
-    is_active: bool = True
-    is_department: bool = False
-
-
-class AliasIn(BaseModel):
-    person_id: UUID
-    alias: str
-    source: str = "manual"
-    confidence: float = 1.0
-
-
-class AliasOut(ORMModel):
-    id: UUID
-    person_id: UUID
-    alias: str
-    source: str
-    confidence: float
+    description: str
+    default_template: str
     created_at: datetime
+    meeting_count: int = 0
+    open_action_count: int = 0
 
 
-# ── ชุดการประชุม ────────────────────────────────────────────────────────
+# ── Meeting ─────────────────────────────────────────────────────────────
 
-class SeriesIn(BaseModel):
-    name: str
-    committee_type: str = ""
-    fiscal_year: int
-    agenda_template_id: str = "tpl-official-th"
-    cadence: str = "monthly"
-    next_meeting_date: Optional[date] = None
-    member_ids: list[UUID] = Field(default_factory=list)
+class MeetingPatch(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    meeting_date: date | None = None
+    collection_id: UUID | None = None
 
 
-class SeriesPatch(BaseModel):
-    name: Optional[str] = None
-    committee_type: Optional[str] = None
-    fiscal_year: Optional[int] = None
-    cadence: Optional[str] = None
-    next_meeting_date: Optional[date] = None
-    member_ids: Optional[list[UUID]] = None
-
-
-class SeriesOut(ORMModel):
+class MeetingOut(OrmModel):
     id: UUID
-    org_id: UUID
-    name: str
-    committee_type: str = ""
-    fiscal_year: int
-    agenda_template_id: str
-    cadence: str
-    next_meeting_date: Optional[date] = None
-    member_ids: list[UUID] = Field(default_factory=list)
-
-
-# ── การประชุม ───────────────────────────────────────────────────────────
-
-class PipelineStep(BaseModel):
-    stage: str
-    state: str = "pending"
-    detail: Optional[str] = None
-    error: Optional[str] = None
-
-
-class MeetingIn(BaseModel):
-    series_id: UUID
-    sequence_no: int
-    meeting_date: date
-    title: str = ""
-    source_kind: str = "audio"
-
-
-class MeetingOut(ORMModel):
-    id: UUID
-    series_id: UUID
-    sequence_no: int
-    fiscal_year: int
-    meeting_date: date
-    title: str = ""
-    summary: Optional[str] = ""
-    audio_uri: Optional[str] = None
+    collection_id: UUID
+    title: str
+    meeting_date: date | None
+    template: str
     source_kind: str
+    source_filename: str
     status: str
-    pipeline: list[PipelineStep] = Field(default_factory=list)
+    pipeline: list[dict]
+    summary: str
+    key_points: list[str]
+    details: dict
     created_at: datetime
-    approved_at: Optional[datetime] = None
-    approved_by: Optional[str] = None
-
-    @field_validator("pipeline", mode="before")
-    @classmethod
-    def filter_legacy_pipeline(cls, value):
-        if isinstance(value, list):
-            return [
-                step
-                for step in value
-                if (isinstance(step, dict) and step.get("stage") != "diarize")
-                or (isinstance(step, PipelineStep) and step.stage != "diarize")
-            ]
-        return value
 
 
-class SegmentOut(ORMModel):
+class SegmentOut(OrmModel):
     id: UUID
-    meeting_id: UUID
     speaker_label: str
-    person_id: Optional[UUID] = None
+    speaker_name: str
     start_ms: int
     end_ms: int
     text: str
     confidence: float
 
 
-class SpeakerPatch(BaseModel):
+class SpeakerRename(BaseModel):
     speaker_label: str
-    person_id: Optional[UUID] = None
-    #  FR-M3-04 ยืนยันครั้งแรก → ระบบจำเป็น alias ถาวร
-    save_alias: Optional[str] = None
+    speaker_name: str = Field(max_length=80)
 
 
-# ── มติ ─────────────────────────────────────────────────────────────────
+# ── Action item ─────────────────────────────────────────────────────────
 
-class ResolutionOut(ORMModel):
+class ActionItemIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+    owner: str = Field(default="", max_length=120)
+    due_date: date | None = None
+
+
+class ActionItemPatch(BaseModel):
+    text: str | None = Field(default=None, min_length=1, max_length=2000)
+    owner: str | None = Field(default=None, max_length=120)
+    due_date: date | None = None
+    done: bool | None = None
+
+
+class ActionItemOut(OrmModel):
     id: UUID
-    series_id: UUID
-    ref_no: str
-    origin_meeting_id: Optional[UUID] = None
-    origin_segment_id: Optional[UUID] = None
-    origin_agenda_item: Optional[str] = None
+    meeting_id: UUID
+    collection_id: UUID
     text: str
-    category: str
-    status: str
-    proposer_person_id: Optional[UUID] = None
-    assignee_ids: list[UUID] = Field(default_factory=list)
-    due_date: Optional[date] = None
-    original_due_date: Optional[date] = None
-    postpone_count: int
-    closed_meeting_id: Optional[UUID] = None
-    closed_at: Optional[datetime] = None
-    superseded_by_id: Optional[UUID] = None
-    extraction_confidence: float
-    created_at: datetime
-    updated_at: datetime
-
-
-class ResolutionPatch(BaseModel):
-    text: Optional[str] = None
-    category: Optional[str] = None
-    due_date: Optional[date] = None
-    assignee_ids: Optional[list[UUID]] = None
-    reason: str = "แก้ไขด้วยผู้ใช้"
-
-
-class StatusChange(BaseModel):
-    status: str
-    reason: str = ""
-    meeting_id: Optional[UUID] = None
-    evidence: Optional[str] = None
-    evidence_start_ms: Optional[int] = None
-    segment_id: Optional[UUID] = None
-
-
-class LinkOut(ORMModel):
-    id: UUID
-    resolution_id: UUID
-    meeting_id: UUID
-    link_type: str
-    segment_id: Optional[UUID] = None
-    evidence_text: str
-    evidence_start_ms: Optional[int] = None
-    confidence: float
+    owner: str
+    due_date: date | None
+    done: bool
+    done_at: datetime | None
+    source_segment_id: UUID | None
+    suggested_done_meeting_id: UUID | None
+    suggested_done_evidence: str
     created_at: datetime
 
 
-class HistoryOut(ORMModel):
-    id: UUID
-    resolution_id: UUID
-    field: str
-    old_value: str
-    new_value: str
-    changed_by: str
-    changed_at: datetime
-    reason: str
-    source_meeting_id: Optional[UUID] = None
-
-
-class ProposalOut(ORMModel):
-    id: UUID
-    meeting_id: UUID
-    kind: str
-    resolution_id: Optional[UUID] = None
-    proposed_status: Optional[str] = None
-    speaker_label: Optional[str] = None
-    candidate_person_ids: list[UUID] = Field(default_factory=list)
-    title: str
-    evidence_text: str
-    evidence_start_ms: Optional[int] = None
-    segment_id: Optional[UUID] = None
-    confidence: float
-    decision: str
-
-
-class ProposalDecision(BaseModel):
-    decision: Literal["accepted", "rejected"]
-    text: Optional[str] = None
-    assignee_ids: Optional[list[UUID]] = None
-    due_date: Optional[date] = None
-    person_id: Optional[UUID] = None
-    save_alias: Optional[str] = None
-
-
-# ── ระเบียบวาระ ─────────────────────────────────────────────────────────
-
-class AgendaItemOut(ORMModel):
-    id: UUID
-    agenda_draft_id: UUID
-    section_no: int
-    item_no: int
-    title: str
-    body: str
-    resolution_id: Optional[UUID] = None
-    sort_order: int
-
-
-class AgendaItemIn(BaseModel):
-    id: Optional[UUID] = None
-    section_no: int
-    item_no: int = 1
-    title: str = ""
-    body: str = ""
-    resolution_id: Optional[UUID] = None
-    sort_order: int = 0
-
-
-class AgendaItemsPatch(BaseModel):
-    items: list[AgendaItemIn]
-
-
-class AgendaOut(ORMModel):
-    id: UUID
-    series_id: UUID
-    target_meeting_date: Optional[date] = None
-    target_sequence_no: int
-    status: str
-    created_at: datetime
-    items: list[AgendaItemOut] = Field(default_factory=list)
-
-
-# ── การส่งออก ───────────────────────────────────────────────────────────
-
-class ActionOut(ORMModel):
-    id: UUID
-    series_id: Optional[UUID] = None
-    meeting_id: Optional[UUID] = None
-    resolution_id: Optional[UUID] = None
-    action_type: str
-    recipient_person_id: Optional[UUID] = None
-    subject: str
-    body: str
-    scheduled_for: Optional[datetime] = None
-    status: str
-    approved_by: Optional[str] = None
-    sent_at: Optional[datetime] = None
-    error: Optional[str] = None
-    created_at: datetime
-
-
-class AuditOut(ORMModel):
-    id: UUID
-    org_id: Optional[UUID] = None
-    actor: str
-    action: str
-    entity_type: str
-    entity_id: str
-    metadata: str = Field(validation_alias="meta", serialization_alias="metadata")
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-
-
-# ── Q&A ─────────────────────────────────────────────────────────────────
-
-class Citation(BaseModel):
-    meeting_id: Optional[UUID] = None
-    segment_id: Optional[UUID] = None
-    resolution_id: Optional[UUID] = None
-    start_ms: Optional[int] = None
-    meeting_seq: Optional[int] = None
-    text: Optional[str] = None
-    quote: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def sync_quote_and_text(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            if "text" in data and not data.get("quote"):
-                data["quote"] = data["text"]
-            elif "quote" in data and not data.get("text"):
-                data["text"] = data["quote"]
-        return data
-
-
-class TimelineEntry(BaseModel):
-    meeting_id: Optional[UUID] = None
-    meeting_seq: Optional[int] = None
-    meeting_date: Optional[str] = None
-    date: Optional[DateOnly] = None
-    action: Optional[str] = None
-    label: str = ""
-    detail: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def sync_label_and_action(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            if "action" in data and not data.get("label"):
-                data["label"] = data["action"]
-            elif "label" in data and not data.get("action"):
-                data["action"] = data["label"]
-            if "meeting_date" in data and not data.get("date"):
-                try:
-                    data["date"] = data["meeting_date"]
-                except Exception:
-                    pass
-        return data
-
+# ── ถาม-ตอบ ─────────────────────────────────────────────────────────────
 
 class Question(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=1000)
 
 
-class QaAnswerOut(ORMModel):
+class QaOut(OrmModel):
     id: UUID
     question: str
     answer: str
-    citations: list[Citation] = Field(default_factory=list)
-    timeline: list[TimelineEntry] = Field(default_factory=list)
-    source: str
+    citations: list[dict]
     asked_at: datetime
 
 
-# ── สรุปสำหรับแดชบอร์ด ──────────────────────────────────────────────────
+# ── อีเมล ───────────────────────────────────────────────────────────────
 
-class SeriesStats(BaseModel):
-    total: int
-    open: int
-    done: int
-    overdue: int
-    flagged: int
-    closure_rate: int
-    avg_days_to_close: int
+class EmailIn(BaseModel):
+    recipients: list[EmailStr] = Field(min_length=1)
+    subject: str | None = Field(default=None, max_length=200)
+    include_action_items: bool = True
 
 
-class AssigneeLoad(BaseModel):
-    person_id: UUID
-    name: str
-    open: int
-    overdue: int
-
-
-class DashboardOut(BaseModel):
-    stats: SeriesStats
-    status_counts: dict[str, int]
-    overdue: list[ResolutionOut]
-    flagged: list[ResolutionOut]
-    load: list[AssigneeLoad]
-
-
-# ── ก้อนข้อมูลทั้งองค์กรสำหรับ frontend ─────────────────────────────────
-
-class Bootstrap(BaseModel):
-    """
-    ชุดข้อมูลทั้งหมดของ org ในรูปเดียวกับ Database ใน frontend/lib/types.ts
-    ระบบขนาด pilot มีข้อมูลไม่กี่พันแถว การส่งทีเดียวจึงถูกกว่าการทำ pagination
-    ทุกหน้าจอ — ถ้าโตกว่านี้ค่อยแตกเป็น endpoint ย่อยตาม §6
-    """
-
-    org: OrganizationOut
-    people: list[PersonOut]
-    aliases: list[AliasOut]
-    series: list[SeriesOut]
-    meetings: list[MeetingOut]
-    segments: list[SegmentOut]
-    resolutions: list[ResolutionOut]
-    links: list[LinkOut]
-    history: list[HistoryOut]
-    proposals: list[ProposalOut]
-    agendas: list[AgendaOut]
-    actions: list[ActionOut]
-    audit: list[AuditOut]
-    qa: dict[str, list[QaAnswerOut]] = Field(default_factory=dict)
-
-
-class UploadAccepted(BaseModel):
-    meeting_id: UUID
-    status: str
-    message: str
-
-
-class Ack(BaseModel):
-    ok: bool = True
-    detail: str = ""
-    data: Optional[Any] = None
+class EmailOut(BaseModel):
+    sent: list[str]
+    failed: list[str]

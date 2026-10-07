@@ -4,31 +4,30 @@
 ทำไมต้องใช้ PostgreSQL จริงแทน SQLite:
     ตารางใช้ชนิด JSONB และ UUID ของ PostgreSQL โดยตรง (app/db/models.py)
     การทดสอบบน SQLite จึงต้องแก้ชนิดข้อมูลจนไม่เหลือความหมายของการทดสอบ
-    สู้ต่อฐานจริงที่แยกออกมาต่างหากตรง ๆ ดีกว่า
 
 ทำไมสร้าง engine ใหม่ทุกเคส:
     IsolatedAsyncioTestCase สร้าง event loop ใหม่ต่อหนึ่งเคส
     ส่วน asyncpg ผูก connection ไว้กับ loop ที่สร้างมัน — ใช้ engine ข้าม loop แล้วพัง
-    (บทเรียนเดียวกับ session_scope() ใน app/workers/tasks.py)
 """
 
 from __future__ import annotations
 
-import tests  # noqa: F401  — ต้องมาก่อน import app เพื่อตั้ง env ของการทดสอบให้ทัน
-
 import asyncio
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date
 from uuid import UUID
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+import tests  # noqa: F401  — ต้องมาก่อน import app เพื่อตั้ง env ของการทดสอบให้ทัน
 from app.core.config import settings
+from app.core.security import create_access_token
 from app.db import models as m
 from app.db.session import Base, get_db
 from app.main import app
+from app.services import vector_store
 
 SETUP_HINT = (
     "ต่อฐานข้อมูลสำหรับทดสอบไม่ได้ที่ %s\n"
@@ -45,13 +44,14 @@ async def _create_schema() -> None:
     engine = create_async_engine(settings.DATABASE_URL)
     try:
         async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
             await conn.run_sync(Base.metadata.create_all)
     finally:
         await engine.dispose()
 
 
 def ensure_schema() -> None:
-    """สร้างตารางครั้งเดียวต่อการรันหนึ่งครั้ง"""
+    """สร้างตารางใหม่ครั้งเดียวต่อการรันหนึ่งครั้ง"""
     global _schema_ready
     if _schema_ready:
         return
@@ -68,6 +68,23 @@ _TRUNCATE = "TRUNCATE TABLE {} RESTART IDENTITY CASCADE".format(
 )
 
 
+def fresh_vector_store() -> None:
+    from qdrant_client import QdrantClient
+
+    from tests.fakes import HashEmbedder
+
+    vector_store.configure(QdrantClient(":memory:"), HashEmbedder())
+
+
+def index_workspace(w: Workspace) -> None:
+    chunks = vector_store.build_chunks(w.meeting.id, w.meeting.summary, w.segments)
+    vector_store.index_meeting(w.user.id, w.collection.id, w.meeting.id, chunks)
+
+
+def auth_headers(user: m.User) -> dict[str, str]:
+    return {"Authorization": f"Bearer {create_access_token(str(user.id))}"}
+
+
 class DbCase(unittest.IsolatedAsyncioTestCase):
     """เคสที่ต้องใช้ฐานข้อมูล — ข้อมูลถูกล้างใหม่ก่อนทุกเคส"""
 
@@ -78,10 +95,9 @@ class DbCase(unittest.IsolatedAsyncioTestCase):
         ensure_schema()
 
     async def asyncSetUp(self) -> None:
+        fresh_vector_store()
         self.engine = create_async_engine(settings.DATABASE_URL)
-        self.sessionmaker = async_sessionmaker(
-            self.engine, class_=AsyncSession, expire_on_commit=False
-        )
+        self.sessionmaker = async_sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
 
         async with self.engine.begin() as conn:
             await conn.execute(text(_TRUNCATE))
@@ -98,13 +114,8 @@ class DbCase(unittest.IsolatedAsyncioTestCase):
         await self.client.aclose()
         await self.engine.dispose()
 
-    # ── ตัวช่วย ────────────────────────────────────────────────────────
-
-    async def session(self) -> AsyncSession:
-        return self.sessionmaker()
-
     async def fetch(self, model, entity_id):
-        """อ่านค่าจากฐานข้อมูลตรง ๆ เพื่อยืนยันว่า API เขียนลงจริง ไม่ใช่แค่ตอบกลับสวย"""
+        """อ่านจากฐานข้อมูลตรง ๆ เพื่อยืนยันว่า API เขียนลงจริง ไม่ใช่แค่ตอบกลับสวย"""
         async with self.sessionmaker() as session:
             return await session.get(model, UUID(str(entity_id)))
 
@@ -126,169 +137,43 @@ class DbCase(unittest.IsolatedAsyncioTestCase):
         return rows
 
 
-class Fixture:
-    """ข้อมูลตั้งต้นขนาดเล็กสำหรับเคส — เล็กกว่า app/seed.py แต่มีครบทุกความสัมพันธ์ที่ต้องทดสอบ"""
+class Workspace:
+    """ข้อมูลของผู้ใช้หนึ่งคน: collection 1 อัน, การประชุมที่เสร็จแล้ว 1 ครั้ง, segment 2 ท่อน, งาน 2 ข้อ"""
 
-    def __init__(self) -> None:
-        self.org: m.Organization
-        self.chair: m.Person
-        self.supply: m.Person
-        self.it: m.Person
-        self.dept: m.Person
-        self.series: m.MeetingSeries
-        self.other_series: m.MeetingSeries
-        self.meeting1: m.Meeting
-        self.meeting2: m.Meeting
-        self.segment: m.TranscriptSegment
-        self.open_res: m.Resolution
-        self.blocked_res: m.Resolution
-        self.done_res: m.Resolution
-        self.cancelled_res: m.Resolution
-        self.overdue_by: int
+    user: m.User
+    collection: m.Collection
+    meeting: m.Meeting
+    segments: list[m.TranscriptSegment]
+    open_item: m.ActionItem
+    done_item: m.ActionItem
+    headers: dict[str, str]
 
 
-async def build_fixture(sessionmaker) -> Fixture:
-    """
-    สร้างชุดข้อมูลที่ครอบคลุมกรณีสำคัญ:
-      * มติค้างที่เกินกำหนด · มติที่เลื่อนซ้ำ 3 ครั้ง · มติที่ปิดแล้ว · มติที่ยกเลิก
-      * ชุดการประชุมที่สองไว้ตรวจว่าข้อมูลไม่รั่วข้ามชุด
-      * ผู้รับผิดชอบที่เป็นหน่วยงาน ไม่ใช่บุคคล
-    """
-    f = Fixture()
-    #  กำหนดเสร็จตั้งเทียบกับวันนี้เสมอ ไม่งั้นเคสจะพังเองเมื่อเวลาผ่านไป
-    today = date.today()
-    f.overdue_by = 26
-    due_overdue = today - timedelta(days=f.overdue_by)
-    due_future = today + timedelta(days=18)
-
-    async with sessionmaker() as s:
-        f.org = m.Organization(name="สำนักงานทดสอบระบบ")
-        s.add(f.org)
-        await s.flush()
-
-        f.chair = m.Person(
-            org_id=f.org.id, full_name="นายธนกฤต อารีวงศ์", position="ผู้อำนวยการ",
-            department="สำนักผู้อำนวยการ", email="chair@test.go.th",
+async def build_workspace(case: DbCase, email: str, name: str) -> Workspace:
+    w = Workspace()
+    (w.user,) = await case.add(m.User(email=email, name=name, provider="google", google_sub=f"sub-{email}"))
+    (w.collection,) = await case.add(m.Collection(user_id=w.user.id, name=f"งานของ{name}"))
+    (w.meeting,) = await case.add(
+        m.Meeting(
+            user_id=w.user.id, collection_id=w.collection.id, title=f"ประชุมทีมของ{name}",
+            meeting_date=date(2026, 9, 1), template="general", source_kind="transcript",
+            status=m.MeetingStatus.READY, pipeline=[], summary=f"สรุปงบประมาณการตลาดของ{name}",
+            key_points=["งบประมาณ"], details={"decisions": ["อนุมัติงบ"]},
         )
-        f.supply = m.Person(
-            org_id=f.org.id, full_name="นางกาญจนา พูลสวัสดิ์", position="หัวหน้าฝ่ายพัสดุ",
-            department="ฝ่ายพัสดุ", email="supply@test.go.th",
+    )
+    w.segments = list(
+        await case.add(
+            m.TranscriptSegment(meeting_id=w.meeting.id, speaker_label="SPEAKER_00", start_ms=0, end_ms=5000,
+                                text="เราอนุมัติงบประมาณการตลาดห้าแสนบาท"),
+            m.TranscriptSegment(meeting_id=w.meeting.id, speaker_label="SPEAKER_01", start_ms=5000, end_ms=9000,
+                                text="ฝั่งดีไซน์จะส่งแบบโฆษณาวันศุกร์"),
         )
-        f.it = m.Person(
-            org_id=f.org.id, full_name="นายวีระพงษ์ ศรีสมบูรณ์", position="หัวหน้าฝ่ายไอที",
-            department="ฝ่ายไอที", email="",  # ตั้งใจไม่มีอีเมล ใช้ทดสอบเส้นทางส่งไม่ได้
-        )
-        f.dept = m.Person(
-            org_id=f.org.id, full_name="ฝ่ายพัสดุ", position="หน่วยงาน",
-            department="ฝ่ายพัสดุ", email="dept@test.go.th", is_department=True,
-        )
-        s.add_all([f.chair, f.supply, f.it, f.dept])
-        await s.flush()
-
-        s.add(m.PersonAlias(person_id=f.chair.id, alias="ท่านประธาน", source="manual", confidence=1.0))
-
-        f.series = m.MeetingSeries(
-            org_id=f.org.id, name="คณะกรรมการบริหาร ปีงบประมาณ 2569",
-            committee_type="คณะกรรมการบริหาร", fiscal_year=2569, cadence="monthly",
-            next_meeting_date=date(2026, 9, 20), member_ids=[str(f.chair.id), str(f.supply.id)],
-        )
-        f.other_series = m.MeetingSeries(
-            org_id=f.org.id, name="คณะกรรมการวิชาการ ปีงบประมาณ 2569",
-            committee_type="คณะกรรมการวิชาการ", fiscal_year=2569, cadence="quarterly",
-        )
-        s.add_all([f.series, f.other_series])
-        await s.flush()
-
-        done_pipeline = [
-            {"stage": stage, "state": "ok", "detail": ""}
-            for stage in ("upload", "asr", "extract", "done")
-        ]
-        f.meeting1 = m.Meeting(
-            series_id=f.series.id, sequence_no=1, fiscal_year=2569, meeting_date=date(2026, 5, 20),
-            title="การประชุมครั้งที่ 1/2569", source_kind="audio",
-            status=m.MeetingStatus.DISTRIBUTED, pipeline=done_pipeline,
-            approved_at=datetime(2026, 5, 20, 16, 0), approved_by="ฝ่ายเลขานุการ",
-        )
-        f.meeting2 = m.Meeting(
-            series_id=f.series.id, sequence_no=2, fiscal_year=2569, meeting_date=date(2026, 6, 18),
-            title="การประชุมครั้งที่ 2/2569", source_kind="audio",
-            status=m.MeetingStatus.DISTRIBUTED, pipeline=done_pipeline,
-            approved_at=datetime(2026, 6, 18, 16, 0), approved_by="ฝ่ายเลขานุการ",
-        )
-        s.add_all([f.meeting1, f.meeting2])
-        await s.flush()
-
-        f.segment = m.TranscriptSegment(
-            meeting_id=f.meeting2.id, speaker_label="SPEAKER_00", person_id=f.chair.id,
-            start_ms=688_000, end_ms=700_000,
-            text="ที่ประชุมมีมติมอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน สำหรับการจัดซื้อครุภัณฑ์คอมพิวเตอร์ทดแทน",
-            confidence=0.97,
-        )
-        s.add(f.segment)
-        await s.flush()
-
-        f.open_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 2/2569 ข้อ 4.1", origin_meeting_id=f.meeting2.id,
-            origin_segment_id=f.segment.id, origin_agenda_item="วาระที่ 4.1",
-            text="มอบหมายให้ฝ่ายพัสดุจัดทำร่างขอบเขตของงาน (TOR) สำหรับการจัดซื้อครุภัณฑ์คอมพิวเตอร์ทดแทน จำนวน 42 เครื่อง",
-            category="procurement", status=m.ResolutionStatus.CONFIRMED,
-            proposer_person_id=f.chair.id, due_date=due_overdue,
-            original_due_date=due_overdue, extraction_confidence=0.97,
-            created_at=datetime(2026, 6, 18, 14, 0),
-        )
-        f.blocked_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 1/2569 ข้อ 4.2", origin_meeting_id=f.meeting1.id,
-            text="ให้ฝ่ายเทคโนโลยีสารสนเทศเร่งรัดผู้รับจ้างให้ส่งมอบระบบสารบรรณอิเล็กทรอนิกส์ให้ครบทุกโมดูล",
-            category="operations", status=m.ResolutionStatus.BLOCKED,
-            due_date=due_future, original_due_date=date(2026, 3, 31), postpone_count=3,
-            extraction_confidence=0.93, created_at=datetime(2026, 5, 20, 14, 0),
-        )
-        f.done_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 1/2569 ข้อ 4.1", origin_meeting_id=f.meeting1.id,
-            text="ให้ทุกฝ่ายจัดทำแผนปฏิบัติการประจำปีงบประมาณ 2569",
-            category="policy", status=m.ResolutionStatus.DONE, due_date=due_overdue,
-            original_due_date=due_overdue, closed_meeting_id=f.meeting2.id,
-            closed_at=datetime(2026, 6, 18, 15, 0), created_at=datetime(2026, 5, 20, 14, 0),
-        )
-        f.cancelled_res = m.Resolution(
-            series_id=f.series.id, ref_no="มติ 1/2569 ข้อ 5.1", origin_meeting_id=f.meeting1.id,
-            text="ให้จัดกิจกรรมสัมมนาประจำปีนอกสถานที่",
-            category="operations", status=m.ResolutionStatus.CANCELLED, due_date=due_overdue,
-            original_due_date=due_overdue, created_at=datetime(2026, 5, 20, 15, 0),
-        )
-        s.add_all([f.open_res, f.blocked_res, f.done_res, f.cancelled_res])
-        await s.flush()
-
-        s.add_all(
-            [
-                m.ResolutionAssignee(resolution_id=f.open_res.id, person_id=f.dept.id, department_name="ฝ่ายพัสดุ"),
-                m.ResolutionAssignee(resolution_id=f.open_res.id, person_id=f.supply.id, department_name="ฝ่ายพัสดุ"),
-                m.ResolutionAssignee(resolution_id=f.blocked_res.id, person_id=f.it.id, department_name="ฝ่ายไอที"),
-            ]
-        )
-        s.add_all(
-            [
-                m.ResolutionLink(
-                    resolution_id=f.open_res.id, meeting_id=f.meeting2.id, link_type=m.LinkType.CREATED,
-                    segment_id=f.segment.id, evidence_text=f.segment.text,
-                    evidence_start_ms=688_000, confidence=0.97,
-                    created_at=datetime(2026, 6, 18, 14, 0),
-                ),
-                m.ResolutionLink(
-                    resolution_id=f.blocked_res.id, meeting_id=f.meeting1.id, link_type=m.LinkType.CREATED,
-                    evidence_text="ที่ประชุมมีมติให้ปรับปรุงระบบสารบรรณอิเล็กทรอนิกส์",
-                    evidence_start_ms=120_000, confidence=0.94,
-                    created_at=datetime(2026, 5, 20, 14, 0),
-                ),
-                m.ResolutionLink(
-                    resolution_id=f.blocked_res.id, meeting_id=f.meeting2.id,
-                    link_type=m.LinkType.PROGRESS_REPORTED,
-                    evidence_text="ผู้รับจ้างส่งมอบโมดูลไม่ครบ ทำให้ยังทดสอบระบบไม่ได้",
-                    evidence_start_ms=1_040_000, confidence=0.93,
-                    created_at=datetime(2026, 6, 18, 15, 10),
-                ),
-            ]
-        )
-        await s.commit()
-
-    return f
+    )
+    w.open_item, w.done_item = await case.add(
+        m.ActionItem(user_id=w.user.id, meeting_id=w.meeting.id, collection_id=w.collection.id,
+                     text="ส่งแบบโฆษณา", owner="มิ้น", due_date=date(2026, 9, 5)),
+        m.ActionItem(user_id=w.user.id, meeting_id=w.meeting.id, collection_id=w.collection.id,
+                     text="สรุปงบประมาณ", done=True),
+    )
+    w.headers = auth_headers(w.user)
+    return w
