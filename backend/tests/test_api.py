@@ -99,6 +99,7 @@ class Isolation(DbCase):
             ("DELETE", f"/meetings/{mt}", None),
             ("POST", f"/meetings/{mt}/retry", None),
             ("GET", f"/meetings/{mt}/segments", None),
+            ("GET", f"/meetings/{mt}/audio", None),
             ("PATCH", f"/meetings/{mt}/speakers", {"speaker_label": "SPEAKER_00", "speaker_name": "x"}),
             ("GET", f"/meetings/{mt}/action-items", None),
             ("POST", f"/meetings/{mt}/action-items", {"text": "แทรก"}),
@@ -257,6 +258,19 @@ class Meetings(DbCase):
                                     json={"speaker_label": "SPEAKER_00", "speaker_name": "คุณภัทร"}, headers=self.w.headers)
         names = {s["speaker_label"]: s["speaker_name"] for s in r.json()}
         self.assertEqual(names, {"SPEAKER_00": "คุณภัทร", "SPEAKER_01": ""})
+
+    async def test_audio_is_streamed_with_range_support(self):
+        r = await self.upload(name="talk.mp3", content=bytes(range(256)) * 4)
+        url = f"/meetings/{r.json()['id']}/audio"
+        full = await self.client.get(url, headers=self.w.headers)
+        self.assertEqual((full.status_code, full.headers["content-type"]), (200, "audio/mpeg"))
+        part = await self.client.get(url, headers={**self.w.headers, "Range": "bytes=10-19"})
+        self.assertEqual(part.status_code, 206)
+        self.assertEqual(part.content, bytes(range(10, 20)))
+
+    async def test_transcript_meetings_have_no_audio(self):
+        r = await self.upload(name="notes.txt", content=b"hello")
+        self.assertEqual((await self.client.get(f"/meetings/{r.json()['id']}/audio", headers=self.w.headers)).status_code, 404)
 
     async def test_export_docx(self):
         r = await self.client.get(f"/meetings/{self.w.meeting.id}/export", headers=self.w.headers)

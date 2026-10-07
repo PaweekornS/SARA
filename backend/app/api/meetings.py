@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from fastapi.responses import FileResponse
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,6 +57,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/meetings", tags=["Meetings"], dependencies=[Depends(current_user)])
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# ตายตัวแทน mimetypes เพราะ mimetypes อ่านค่าจาก registry ของเครื่อง (Windows ให้ audio/mp3)
+AUDIO_MIME = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+}
 
 
 @router.post("", response_model=MeetingOut, status_code=202)
@@ -155,6 +166,17 @@ async def retry(meeting_id: UUID, user: User = Depends(current_user), db: AsyncS
     await db.refresh(meeting)
     process_meeting_task.delay(str(meeting.id))
     return meeting
+
+
+@router.get("/{meeting_id}/audio")
+async def get_audio(meeting_id: UUID, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
+    """ไฟล์เสียงต้นฉบับให้หน้าจอเล่นตาม transcript — FileResponse รองรับ Range จึงเลื่อนไปจุดไหนก็ได้"""
+    meeting = await owned_or_404(db, Meeting, meeting_id, user, "การประชุม")
+    if meeting.source_kind != "audio" or not meeting.file_uri or not os.path.exists(meeting.file_uri):
+        raise HTTPException(status_code=404, detail="การประชุมนี้ไม่มีไฟล์เสียง")
+    ext = os.path.splitext(meeting.file_uri)[1].lower()
+    media_type = AUDIO_MIME.get(ext, "application/octet-stream")
+    return FileResponse(meeting.file_uri, media_type=media_type)
 
 
 @router.get("/{meeting_id}/segments", response_model=list[SegmentOut])
