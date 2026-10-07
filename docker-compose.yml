@@ -1,147 +1,155 @@
+name: ${TEAM:-sara}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+x-common: &common
+  restart: unless-stopped
+  logging: *logging
+  networks: [app]
+
+x-backend: &backend
+  <<: *common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile.backend
+  env_file:
+    - .env
+  environment:
+    ENV: ${ENV:-prod}
+    DATABASE_URL: postgresql+asyncpg://postgres:${APP_POSTGRES_PASSWORD:?APP_POSTGRES_PASSWORD is required}@db:5432/sara
+    REDIS_URL: redis://redis:6379/0
+    QDRANT_URL: http://qdrant:6333
+    UPLOAD_DIR: /data/uploads
+    ROOT_PATH: ${ROOT_PATH-/api}
+    GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+    CORS_ORIGINS: ${CORS_ORIGINS:-https://${TEAM:-sara}.aiforthai.in.th}
+  volumes:
+    - /data/hack/${TEAM:-sara}/uploads:/data/uploads
+
 services:
-  # -------------------------------
-  # 1. PostgreSQL
-  # -------------------------------
-  db:
-    image: postgres:15-alpine
-    container_name: aiaas_postgres
-    restart: always
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
-      POSTGRES_DB: aiaas_db
-    ports:
-      # ถ้าเครื่องมี PostgreSQL ของตัวเองอยู่แล้ว พอร์ต 5432 จะชนกัน
-      # เปลี่ยนฝั่งซ้ายเป็น 5433 ได้ ภายใน compose ยังคุยกันที่ db:5432 เหมือนเดิม
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   # ---------------------------------
-  # 2. Redis (broker ของ Celery)
+  # Next.js frontend
   # ---------------------------------
-  redis:
-    image: redis:7-alpine
-    container_name: aiaas_redis
-    restart: always
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # ---------------------------------
-  # 3. รัน migration แล้วจบ (ทำงานครั้งเดียวก่อนบริการอื่นเริ่ม)
-  # ---------------------------------
-  migrate:
+  frontend:
+    <<: *common
     build:
-      context: ./backend
-      dockerfile: Dockerfile.backend
-    container_name: aiaas_migrate
-    command: sh -c "alembic upgrade head && python -m app.seed"
-    env_file:
-      - .env
+      context: ./frontend
+      dockerfile: Dockerfile.frontend
+      args:
+        # same-origin: เรียก API ผ่าน /api บนโดเมนเดียวกับหน้าเว็บ
+        NEXT_PUBLIC_API_URL: /api
+        NEXT_PUBLIC_USE_MOCK: "false"
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    ports:
+      - "127.0.0.1:${BASE:-20130}:3000"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
+      NODE_ENV: production
     depends_on:
-      db:
+      api:
         condition: service_healthy
-    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
 
   # ---------------------------------
-  # 4. FastAPI
+  # FastAPI — migration + seed (seed ข้ามเองเมื่อ ENV=prod) แล้วค่อยเปิด server
   # ---------------------------------
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.backend
-    container_name: aiaas_backend
-    restart: always
+  api:
+    <<: *backend
+    command: >
+      sh -c "alembic upgrade head && (python -m app.seed || true) &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=*"
     ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
-      - REDIS_URL=redis://redis:6379/0
-      - MCP_SERVER_URL=http://mcp_server:8001/mcp
-      - UPLOAD_DIR=/data/uploads
-      - PUBLIC_BASE_URL=http://localhost:8000
-    volumes:
-      - shared_uploads:/data/uploads
+      - "127.0.0.1:${BASE_1:-20131}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      qdrant:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "3.0"
 
   # ---------------------------------
-  # 5. Celery worker (ASR · สกัดมติ · ส่งอีเมล)
+  # Celery worker (ASR · สรุป · ทำดัชนี · ตรวจงานค้าง)
+  # -B ฝัง scheduler (sweep งานค้างทุก 10 นาที) ไว้ใน worker — ถ้า scale เป็นหลาย worker ให้แยก beat ออกเป็น service ของตัวเอง
+  # --concurrency=2 กันยิง ASR/LLM ของ AI4Thai พร้อมกันเกินโควตา
   # ---------------------------------
-  celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.backend
-    container_name: aiaas_celery_worker
-    restart: always
-    command: celery -A app.workers.tasks.celery_app worker --loglevel=info
-    env_file:
-      - .env
+  worker:
+    <<: *backend
+    command: celery -A app.workers.tasks.celery_app worker -B --concurrency=2 --loglevel=info --schedule=/tmp/celerybeat-schedule
+    depends_on:
+      api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+          cpus: "2.0"
+
+  db:
+    <<: *common
+    image: postgres:15-alpine
     environment:
-      - DATABASE_URL=postgresql+asyncpg://postgres:postgrespassword@db:5432/aiaas_db
-      - REDIS_URL=redis://redis:6379/0
-      - MCP_SERVER_URL=http://mcp_server:8001/mcp
-      - UPLOAD_DIR=/data/uploads
-      - PUBLIC_BASE_URL=http://localhost:8000
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD:?APP_POSTGRES_PASSWORD is required}
+      POSTGRES_DB: sara
     volumes:
-      - shared_uploads:/data/uploads
-    depends_on:
-      - backend
-      - redis
-      - mcp_server
+      - /data/hack/${TEAM:-sara}/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sara"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
 
-  # -------------------------------------
-  # 6. MCP server (ชั้น action ทั้งหมดออกทางนี้)
-  # -------------------------------------
-  mcp_server:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile.backend
-    container_name: aiaas_mcp_server
-    restart: always
-    ports:
-      - "8001:8001"
-    command: python mcp_server.py
-    env_file:
-      - .env
+  redis:
+    <<: *common
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
 
-  # -------------------------------------
-  # 7. Next.js frontend
-  # -------------------------------------
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.frontend
-      args:
-        # NEXT_PUBLIC_* ถูกฝังตอน build — ต้องส่งเป็น build arg ไม่ใช่ environment
-        NEXT_PUBLIC_API_URL: http://localhost:8000/api
-        NEXT_PUBLIC_USE_MOCK: "false"
-    container_name: aiaas_frontend
-    restart: always
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
+  qdrant:
+    <<: *common
+    image: qdrant/qdrant:v1.19.2
+    volumes:
+      - /data/hack/${TEAM:-sara}/qdrant:/qdrant/storage
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
 
-volumes:
-  postgres_data:
-  shared_uploads:
+networks:
+  app:
+    driver: bridge

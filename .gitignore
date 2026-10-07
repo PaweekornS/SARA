@@ -14,6 +14,7 @@ venv/
 # Uploaded Files / Temp
 /tmp/
 uploads/
+docs/RULES.md
 
 # IDE / OS
 .vscode/

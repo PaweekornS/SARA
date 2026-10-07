@@ -1,11 +1,13 @@
 """
-งานเบื้องหลังทั้งหมด (Celery)
+งานเบื้องหลัง (Celery)
 
-pipeline ของการประชุม 1 ครั้ง: upload → asr → diarize → extract → done
-ทุกขั้นเขียนสถานะกลับลง DB ทันทีเพื่อให้หน้าจอเห็นความคืบหน้าจริง (FR-M2-03)
+pipeline ของการประชุม 1 ครั้ง: upload → asr → summarize → index → followup → done
+ทุกขั้นเขียนสถานะกลับลง DB ทันทีเพื่อให้หน้าจอเห็นความคืบหน้าจริง
 
-⚠ FR-M2-04: ถ้าขั้นไหนล้มเหลว ต้องหยุดทั้ง pipeline บันทึกข้อความ error จริง
+⚠ ถ้า upload / asr / summarize ล้มเหลว ต้องหยุดทั้ง pipeline บันทึกข้อความ error จริง
    และตั้งสถานะเป็น failed — ห้ามเดินต่อด้วยข้อมูลที่แต่งขึ้น
+   ส่วน index และ followup เป็นของเสริม ถ้าล้มให้ข้ามไปได้โดยไม่ทำให้การประชุมล้มตาม
+   (index ล้ม = ถาม-ตอบยังค้นการประชุมนี้แบบคำได้ แค่ไม่มีการค้นเชิงความหมาย)
 """
 
 from __future__ import annotations
@@ -18,33 +20,24 @@ from datetime import date, timedelta
 from uuid import UUID
 
 from celery import Celery
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import settings
-from app.db.models import (
-    ActionStatus,
-    LinkType,
-    Meeting,
-    MeetingSeries,
-    MeetingStatus,
-    OutboundAction,
-    Person,
-    PersonAlias,
-    Proposal,
-    Resolution,
-    ResolutionAssignee,
-    ResolutionLink,
-    ResolutionStatus,
-    TranscriptSegment,
+from app.db.models import ActionItem, Meeting, MeetingStatus, TranscriptSegment, _now
+from app.services import extraction, vector_store
+from app.services.asr import (
+    AsrError,
+    Transcript,
+    load_transcript_file,
+    transcribe_audio,
 )
-from app.services import extraction
-from app.services.asr import AsrError, Transcript, load_transcript_file, transcribe_audio
 from app.services.llm import LlmError
-from app.services.resolutions import next_ref_no, overdue_days, utcnow
-from app.services.thai_format import thai_date
 
 logger = logging.getLogger(__name__)
+
+TIME_LIMIT_SECONDS = settings.MEETING_TIME_LIMIT_MINUTES * 60
+STUCK_AFTER = timedelta(minutes=settings.MEETING_TIME_LIMIT_MINUTES + 15)
 
 celery_app = Celery("sara", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
 celery_app.conf.update(
@@ -53,7 +46,31 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone=settings.TIMEZONE,
     enable_utc=False,
+    #  ack หลังทำเสร็จ — ถ้า worker ตายกลางงาน Redis จะส่งงานกลับเข้าคิวให้ worker ตัวอื่น
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+    #  ต้องนานกว่า time limit ไม่งั้น Redis ส่งงานที่ยังรันอยู่ซ้ำให้อีกตัว
+    broker_transport_options={"visibility_timeout": TIME_LIMIT_SECONDS * 2},
+    task_soft_time_limit=TIME_LIMIT_SECONDS,
+    task_time_limit=TIME_LIMIT_SECONDS + 60,
+    beat_schedule={
+        "sweep-stuck-meetings": {"task": "sweep_stuck_meetings_task", "schedule": 600.0},
+    },
 )
+
+INITIAL_PIPELINE = [
+    {"stage": "upload", "state": "pending", "detail": "รับไฟล์และตรวจความสมบูรณ์"},
+    {"stage": "asr", "state": "pending", "detail": "ถอดเสียงด้วย AI4Thai ASR"},
+    {"stage": "summarize", "state": "pending", "detail": "สรุปเนื้อหาและงานที่ต้องทำ"},
+    {"stage": "index", "state": "pending", "detail": "จัดทำดัชนีสำหรับถาม-ตอบ"},
+    {"stage": "followup", "state": "pending", "detail": "ตรวจงานค้างจากการประชุมก่อน ๆ"},
+    {"stage": "done", "state": "pending", "detail": "พร้อมใช้งาน"},
+]
+
+
+def fresh_pipeline() -> list[dict]:
+    return [dict(step) for step in INITIAL_PIPELINE]
 
 
 def run_async(coro):
@@ -65,7 +82,7 @@ def run_async(coro):
 
 
 @asynccontextmanager
-async def session_scope() -> AsyncSession:
+async def session_scope():
     """สร้าง engine ใหม่ต่อหนึ่งงาน แล้วปิดให้เรียบร้อย — worker ไม่ได้รันงานถี่พอให้ต้องใช้ pool ร่วม"""
     engine = create_async_engine(settings.DATABASE_URL, echo=False, future=True)
     factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -76,12 +93,172 @@ async def session_scope() -> AsyncSession:
         await engine.dispose()
 
 
-# ── pipeline ────────────────────────────────────────────────────────────
+@celery_app.task(name="process_meeting_task", bind=True, max_retries=0)
+def process_meeting_task(self, meeting_id: str):
+    return run_async(process_meeting(UUID(meeting_id)))
 
-async def _set_stage(
-    session: AsyncSession, meeting: Meeting, stage: str, state: str, detail=None, error=None
-) -> None:
-    pipeline = [dict(step) for step in (meeting.pipeline or [])]
+
+async def process_meeting(meeting_id: UUID) -> dict:
+    async with session_scope() as session:
+        meeting = await session.get(Meeting, meeting_id)
+        if meeting is None:
+            return {"status": "SKIPPED", "reason": "ไม่พบการประชุม"}
+        if meeting.status != MeetingStatus.PROCESSING:
+            #  งานที่ถูกส่งซ้ำหลังจากรอบก่อนจบไปแล้ว หรือถูก sweep เป็น failed ไปแล้ว
+            return {"status": "SKIPPED", "reason": meeting.status}
+
+        meeting.processing_attempts = (meeting.processing_attempts or 0) + 1
+        await session.commit()
+        if meeting.processing_attempts > settings.MAX_PROCESSING_ATTEMPTS:
+            #  worker ล่มระหว่างทำไฟล์นี้ซ้ำหลายรอบแล้ว (เช่นไฟล์ทำ memory เต็ม) — หยุดวน
+            return await _fail(session, meeting, _current_stage(meeting), "ประมวลผลไม่สำเร็จหลายครั้ง กรุณาลองไฟล์ใหม่")
+        return await _run_pipeline(session, meeting)
+
+
+@celery_app.task(name="sweep_stuck_meetings_task")
+def sweep_stuck_meetings_task():
+    return run_async(sweep_stuck_meetings())
+
+
+async def sweep_stuck_meetings() -> int:
+    """การประชุมที่ค้าง processing นานเกิน time limit แปลว่างานหายไปแล้ว ตั้งเป็น failed ให้ผู้ใช้กด retry ได้"""
+    cutoff = _now() - STUCK_AFTER
+    async with session_scope() as session:
+        stuck = (
+            await session.execute(
+                select(Meeting).where(
+                    Meeting.status == MeetingStatus.PROCESSING,
+                    Meeting.processing_started_at < cutoff,
+                )
+            )
+        ).scalars().all()
+        for meeting in stuck:
+            await _fail(session, meeting, _current_stage(meeting), "ประมวลผลนานผิดปกติ ระบบหยุดงานนี้แล้ว กรุณากดประมวลผลใหม่")
+        return len(stuck)
+
+
+def _current_stage(meeting: Meeting) -> str:
+    for step in meeting.pipeline or []:
+        if step.get("state") in ("running", "pending"):
+            return step["stage"]
+    return "done"
+
+
+async def _run_pipeline(session: AsyncSession, meeting: Meeting) -> dict:
+    #  ล้างผลลัพธ์ของรอบก่อนออกก่อนเสมอ เพื่อไม่ให้ retry แล้วข้อมูลซ้อนกัน
+    await _clear_previous_run(session, meeting)
+
+    # 1) upload
+    await _set_stage(session, meeting, "upload", "running")
+    path = meeting.file_uri or ""
+    if not os.path.exists(path):
+        return await _fail(session, meeting, "upload", "ไม่พบไฟล์ที่อัปโหลด")
+    await _set_stage(session, meeting, "upload", "ok", detail=f"{os.path.getsize(path) / 1024 / 1024:.1f} MB")
+
+    # 2) asr
+    await _set_stage(session, meeting, "asr", "running")
+    try:
+        transcript = load_transcript_file(path) if meeting.source_kind == "transcript" else transcribe_audio(path)
+    except AsrError as err:
+        return await _fail(session, meeting, "asr", f"{err} — หยุด pipeline ไม่มีการสร้าง transcript ทดแทน")
+    except Exception as err:  # noqa: BLE001
+        logger.exception("asr ล้มเหลว")
+        return await _fail(session, meeting, "asr", f"ถอดเสียงไม่สำเร็จ: {err}")
+    if not transcript.segments:
+        return await _fail(session, meeting, "asr", "ไม่พบเสียงพูดหรือข้อความในไฟล์")
+
+    segments = await _store_segments(session, meeting, transcript)
+    await _set_stage(session, meeting, "asr", "ok", detail=f"ได้ {len(segments)} ท่อน")
+    views = [extraction.SegmentView(index=i, speaker_label=s.speaker_label, text=s.text) for i, s in enumerate(segments)]
+
+    # 3) summarize
+    await _set_stage(session, meeting, "summarize", "running")
+    try:
+        result = extraction.summarize(views, meeting.template, meeting.title)
+    except LlmError as err:
+        return await _fail(session, meeting, "summarize", f"สรุปไม่สำเร็จ: {err}")
+    except Exception as err:  # noqa: BLE001
+        logger.exception("summarize ล้มเหลว")
+        return await _fail(session, meeting, "summarize", f"สรุปไม่สำเร็จ: {err}")
+
+    meeting.summary = result.summary
+    meeting.key_points = result.key_points
+    meeting.details = result.details
+    for draft in result.action_items:
+        source = segments[draft.segment_index] if draft.segment_index is not None else None
+        session.add(
+            ActionItem(
+                user_id=meeting.user_id,
+                meeting_id=meeting.id,
+                collection_id=meeting.collection_id,
+                text=draft.text,
+                owner=draft.owner,
+                due_date=date.fromisoformat(draft.due_date) if draft.due_date else None,
+                source_segment_id=source.id if source else None,
+            )
+        )
+    await _set_stage(session, meeting, "summarize", "ok", detail=f"งานที่ต้องทำ {len(result.action_items)} รายการ")
+
+    # 4) index — ล้มได้โดยไม่กระทบผลสรุป
+    await _set_stage(session, meeting, "index", "running")
+    try:
+        chunks = vector_store.build_chunks(meeting.id, meeting.summary, segments)
+        count = await asyncio.to_thread(
+            vector_store.index_meeting, meeting.user_id, meeting.collection_id, meeting.id, chunks
+        )
+        await _set_stage(session, meeting, "index", "ok", detail=f"{count} ช่วง")
+    except Exception as err:  # noqa: BLE001
+        logger.warning("ทำดัชนีไม่สำเร็จ ข้ามขั้นนี้: %s", err)
+        await _set_stage(session, meeting, "index", "skipped", error=f"ข้ามขั้นนี้: {err}")
+
+    # 5) followup — ล้มได้โดยไม่กระทบผลสรุป
+    await _set_stage(session, meeting, "followup", "running")
+    try:
+        suggested = await _suggest_completed(session, meeting, segments, views)
+        await _set_stage(session, meeting, "followup", "ok", detail=f"น่าจะเสร็จแล้ว {suggested} รายการ")
+    except Exception as err:  # noqa: BLE001
+        logger.warning("ตรวจงานค้างไม่สำเร็จ ข้ามขั้นนี้: %s", err)
+        await _set_stage(session, meeting, "followup", "skipped", error=f"ข้ามขั้นนี้: {err}")
+
+    # 6) done
+    await _set_stage(session, meeting, "done", "ok")
+    meeting.status = MeetingStatus.READY
+    await session.commit()
+    return {"status": "SUCCESS", "meeting_id": str(meeting.id), "action_items": len(result.action_items)}
+
+
+async def _suggest_completed(
+    session: AsyncSession,
+    meeting: Meeting,
+    segments: list[TranscriptSegment],
+    views: list[extraction.SegmentView],
+) -> int:
+    open_items = (
+        await session.execute(
+            select(ActionItem)
+            .where(
+                ActionItem.collection_id == meeting.collection_id,
+                ActionItem.meeting_id != meeting.id,
+                ActionItem.done.is_(False),
+            )
+            .order_by(ActionItem.created_at)
+        )
+    ).scalars().all()
+    if not open_items:
+        return 0
+
+    listing = [extraction.OpenItemView(number=i, text=item.text, owner=item.owner) for i, item in enumerate(open_items, 1)]
+    hints = extraction.detect_completed(views, listing)
+    for hint in hints:
+        item = open_items[hint.number - 1]
+        source = segments[hint.segment_index] if hint.segment_index is not None else None
+        item.suggested_done_meeting_id = meeting.id
+        item.suggested_done_evidence = hint.evidence or (source.text if source else "")
+    return len(hints)
+
+
+async def _set_stage(session: AsyncSession, meeting: Meeting, stage: str, state: str, detail=None, error=None) -> None:
+    pipeline = [dict(step) for step in (meeting.pipeline or fresh_pipeline())]
     for step in pipeline:
         if step.get("stage") == stage:
             step["state"] = state
@@ -93,98 +270,26 @@ async def _set_stage(
     await session.commit()
 
 
-@celery_app.task(name="process_meeting_task", bind=True, max_retries=0)
-def process_meeting_task(self, meeting_id: str, file_path: str, simulate_asr_failure: bool = False):
-    return run_async(_process_meeting(UUID(meeting_id), file_path, simulate_asr_failure))
-
-
-async def _process_meeting(meeting_id: UUID, file_path: str, simulate_asr_failure: bool) -> dict:
-    async with session_scope() as session:
-        meeting = await session.get(Meeting, meeting_id)
-        if meeting is None:
-            return {"status": "SKIPPED", "reason": "ไม่พบการประชุม"}
-
-        series = await session.get(MeetingSeries, meeting.series_id)
-
-        #  ล้างผลลัพธ์ของรอบก่อนออกก่อนเสมอ เพื่อไม่ให้ retry แล้วข้อมูลซ้อนกัน
-        await _clear_previous_run(session, meeting)
-
-        # 1) upload
-        await _set_stage(session, meeting, "upload", "running")
-        if not os.path.exists(file_path):
-            await _fail(session, meeting, "upload", f"ไม่พบไฟล์ {file_path}")
-            return {"status": "FAILED", "stage": "upload"}
-        await _set_stage(session, meeting, "upload", "ok", detail=f"{os.path.getsize(file_path) / 1024 / 1024:.1f} MB")
-
-        # 2) asr
-        await _set_stage(session, meeting, "asr", "running")
-        try:
-            if simulate_asr_failure:
-                #  โหมดสาธิตสำหรับแสดงว่าเมื่อ ASR ล้ม ระบบหยุดจริงและไม่แต่งข้อมูล
-                raise AsrError("โหมดจำลอง: ASR API ไม่ตอบสนอง (HTTP 504 หลัง retry 3 ครั้ง)")
-            if meeting.source_kind == "transcript":
-                transcript = load_transcript_file(file_path)
-            else:
-                transcript = transcribe_audio(file_path)
-        except AsrError as err:
-            await _fail(session, meeting, "asr", f"{err} — หยุด pipeline ไม่มีการสร้าง transcript ทดแทน")
-            return {"status": "FAILED", "stage": "asr"}
-        except Exception as err:  # noqa: BLE001
-            await _fail(session, meeting, "asr", f"ถอดเสียงไม่สำเร็จ: {err}")
-            return {"status": "FAILED", "stage": "asr"}
-
-        await _set_stage(
-            session, meeting, "asr", "ok",
-            detail=f"ได้ {len(transcript.segments)} ท่อน จาก {settings.ASR_MODEL}",
-        )
-        segments = await _store_segments(session, meeting, transcript)
-
-        # 3) extract (สรุปเนื้อหาและสกัดมติ)
-        await _set_stage(session, meeting, "extract", "running")
-        try:
-            created = await _extract_and_link(session, meeting, series, segments)
-        except LlmError as err:
-            await _fail(session, meeting, "extract", f"สกัดมติไม่สำเร็จ: {err}")
-            return {"status": "FAILED", "stage": "extract"}
-        except Exception as err:  # noqa: BLE001
-            logger.exception("extract ล้มเหลว")
-            await _fail(session, meeting, "extract", f"สกัดมติไม่สำเร็จ: {err}")
-            return {"status": "FAILED", "stage": "extract"}
-
-        await _set_stage(session, meeting, "extract", "ok", detail=f"สกัดมติได้ {created} รายการ")
-
-        # 4) done
-        await _set_stage(session, meeting, "done", "ok", detail="พร้อมให้ตรวจทาน")
-        meeting.status = MeetingStatus.DRAFT
-        await session.commit()
-
-        return {"status": "SUCCESS", "meeting_id": str(meeting_id), "proposals": created}
-
-
 async def _clear_previous_run(session: AsyncSession, meeting: Meeting) -> None:
-    for row in (
-        await session.execute(select(TranscriptSegment).where(TranscriptSegment.meeting_id == meeting.id))
-    ).scalars().all():
-        await session.delete(row)
-    for row in (
-        await session.execute(
-            select(Proposal).where(Proposal.meeting_id == meeting.id, Proposal.decision == "pending")
-        )
-    ).scalars().all():
-        await session.delete(row)
+    await session.execute(delete(ActionItem).where(ActionItem.meeting_id == meeting.id))
+    await session.execute(delete(TranscriptSegment).where(TranscriptSegment.meeting_id == meeting.id))
+    meeting.summary = ""
+    meeting.key_points = []
+    meeting.details = {}
+    meeting.status = MeetingStatus.PROCESSING
+    meeting.pipeline = fresh_pipeline()
     await session.commit()
 
 
-async def _fail(session: AsyncSession, meeting: Meeting, stage: str, message: str) -> None:
+async def _fail(session: AsyncSession, meeting: Meeting, stage: str, message: str) -> dict:
     logger.error("การประชุม %s ล้มเหลวที่ขั้น %s: %s", meeting.id, stage, message)
     await _set_stage(session, meeting, stage, "failed", error=message)
     meeting.status = MeetingStatus.FAILED
     await session.commit()
+    return {"status": "FAILED", "stage": stage}
 
 
-async def _store_segments(
-    session: AsyncSession, meeting: Meeting, transcript: Transcript
-) -> list[TranscriptSegment]:
+async def _store_segments(session: AsyncSession, meeting: Meeting, transcript: Transcript) -> list[TranscriptSegment]:
     rows = [
         TranscriptSegment(
             meeting_id=meeting.id,
@@ -197,215 +302,5 @@ async def _store_segments(
         for seg in transcript.segments
     ]
     session.add_all(rows)
-    await session.commit()
-    for row in rows:
-        await session.refresh(row)
+    await session.flush()
     return rows
-
-
-async def _extract_and_link(
-    session: AsyncSession,
-    meeting: Meeting,
-    series: MeetingSeries | None,
-    segments: list[TranscriptSegment],
-) -> int:
-    """
-    สรุปเนื้อหา ASR + สกัดมติจากการประชุม และผูกฝ่ายรับผิดชอบเบื้องต้น
-    """
-    segment_views = [
-        extraction.SegmentView(index=i, speaker_label=s.speaker_label, start_ms=s.start_ms, text=s.text)
-        for i, s in enumerate(segments)
-    ]
-
-    result = extraction.extract(
-        segment_views,
-        meeting_label=f"ครั้งที่ {meeting.sequence_no}/{meeting.fiscal_year} วันที่ {thai_date(meeting.meeting_date)}",
-    )
-
-    if result.summary:
-        meeting.summary = result.summary
-
-    existing_res_count = len(
-        (
-            await session.execute(
-                select(Resolution).where(Resolution.origin_meeting_id == meeting.id)
-            )
-        ).scalars().all()
-    )
-
-    created = 0
-    for i, item in enumerate(result.new_resolutions, start=existing_res_count + 1):
-        segment = segments[item.segment_index] if item.segment_index is not None else None
-        ref = next_ref_no(meeting.sequence_no, meeting.fiscal_year, i)
-
-        parsed_due_date = None
-        if item.due_date:
-            try:
-                parsed_due_date = date.fromisoformat(item.due_date) if isinstance(item.due_date, str) else item.due_date
-            except (ValueError, TypeError):
-                parsed_due_date = None
-
-        res = Resolution(
-            series_id=meeting.series_id,
-            ref_no=ref,
-            origin_meeting_id=meeting.id,
-            origin_segment_id=segment.id if segment else None,
-            origin_agenda_item=f"วาระที่ 4.{i}",
-            text=item.text,
-            category=item.category,
-            status=ResolutionStatus.PROPOSED,
-            due_date=parsed_due_date,
-            original_due_date=parsed_due_date,
-            extraction_confidence=item.confidence,
-        )
-        session.add(res)
-        await session.flush()
-
-        # Find matching department/person in org
-        if item.assignee_mention and series:
-            needle = item.assignee_mention.strip()
-            dept = (
-                await session.execute(
-                    select(Person).where(
-                        Person.org_id == series.org_id,
-                        Person.full_name.ilike(f"%{needle}%"),
-                    )
-                )
-            ).scalars().first()
-            if dept:
-                session.add(ResolutionAssignee(resolution_id=res.id, person_id=dept.id))
-
-        session.add(
-            ResolutionLink(
-                resolution_id=res.id,
-                meeting_id=meeting.id,
-                link_type=LinkType.CREATED,
-                segment_id=segment.id if segment else None,
-                evidence_text=segment.text if segment else item.text,
-                evidence_start_ms=segment.start_ms if segment else None,
-                confidence=item.confidence,
-            )
-        )
-        created += 1
-
-    await session.commit()
-    return created
-
-
-async def _speaker_proposals(
-    session: AsyncSession,
-    meeting: Meeting,
-    segments: list[TranscriptSegment],
-    mentions: list[extraction.SpeakerMention],
-) -> int:
-    """
-    FR-M3-03 — ถ้า resolve ชื่อได้แน่ชัดจาก alias ที่เคยยืนยันแล้วก็ผูกให้เลย
-    ถ้าไม่มั่นใจ ห้ามเดา ให้สร้างข้อเสนอถามคนแทน
-    """
-    people = list((await session.execute(select(Person))).scalars().all())
-    aliases = list((await session.execute(select(PersonAlias))).scalars().all())
-
-    candidates: list[tuple[str, str]] = [(str(p.id), p.full_name) for p in people]
-    candidates += [(str(a.person_id), a.alias) for a in aliases]
-
-    labels = {s.speaker_label for s in segments}
-    resolved: dict[str, UUID] = {}
-    created = 0
-
-    for mention in mentions:
-        if mention.speaker_label not in labels:
-            continue
-        person_id, confidence = extraction.resolve_person(mention.name_mention, candidates)
-        sample = next((s for s in segments if s.speaker_label == mention.speaker_label), None)
-
-        if person_id and confidence >= 0.9:
-            resolved[mention.speaker_label] = UUID(person_id)
-            continue
-
-        session.add(
-            Proposal(
-                meeting_id=meeting.id,
-                kind="speaker_identity",
-                speaker_label=mention.speaker_label,
-                candidate_person_ids=[person_id] if person_id else [],
-                title=f"ระบุตัวผู้พูด {mention.speaker_label} (ได้ยินเรียกว่า “{mention.name_mention}”)",
-                evidence_text=sample.text if sample else "",
-                evidence_start_ms=sample.start_ms if sample else None,
-                segment_id=sample.id if sample else None,
-                confidence=confidence,
-            )
-        )
-        created += 1
-
-    for label, person_id in resolved.items():
-        for segment in segments:
-            if segment.speaker_label == label:
-                segment.person_id = person_id
-
-    #  ผู้พูดที่ไม่มีใครเอ่ยชื่อถึงเลย ยังต้องให้เลขาฯ ระบุเองในหน้าตรวจทาน
-    for label in sorted(labels - set(resolved) - {m.speaker_label for m in mentions}):
-        sample = next((s for s in segments if s.speaker_label == label), None)
-        session.add(
-            Proposal(
-                meeting_id=meeting.id,
-                kind="speaker_identity",
-                speaker_label=label,
-                candidate_person_ids=[],
-                title=f"ระบุตัวผู้พูด {label}",
-                evidence_text=sample.text if sample else "",
-                evidence_start_ms=sample.start_ms if sample else None,
-                segment_id=sample.id if sample else None,
-                confidence=0.0,
-            )
-        )
-        created += 1
-
-    return created
-
-
-# ── การส่งออก (M7) ──────────────────────────────────────────────────────
-
-@celery_app.task(name="send_outbound_action_task", bind=True, max_retries=2, default_retry_delay=60)
-def send_outbound_action_task(self, action_id: str):
-    return run_async(_send_action(UUID(action_id), self))
-
-
-async def _send_action(action_id: UUID, task) -> dict:
-    from app.services.mcp_agent import McpError, send_email_via_mcp
-
-    async with session_scope() as session:
-        action = await session.get(OutboundAction, action_id)
-        if action is None:
-            return {"status": "SKIPPED"}
-        if action.status != ActionStatus.APPROVED:
-            #  ป้องกันการส่งซ้ำ และกันไม่ให้ของที่ยังไม่อนุมัติหลุดออกไป
-            return {"status": "SKIPPED", "reason": action.status}
-
-        recipient = await session.get(Person, action.recipient_person_id)
-        if recipient is None or not recipient.email:
-            action.status = ActionStatus.FAILED
-            action.error = "ผู้รับไม่มีอีเมลในทะเบียนบุคคล"
-            await session.commit()
-            return {"status": "FAILED"}
-
-        try:
-            await send_email_via_mcp(
-                to_email=recipient.email,
-                subject=action.subject,
-                greeting=f"เรียน {recipient.position or recipient.full_name}",
-                body=action.body,
-                rows=(action.payload or {}).get("rows", []),
-            )
-        except McpError as err:
-            action.status = ActionStatus.FAILED
-            action.error = str(err)
-            await session.commit()
-            logger.error("ส่งอีเมลไม่สำเร็จ: %s", err)
-            raise task.retry(exc=err)
-
-        action.status = ActionStatus.SENT
-        action.sent_at = utcnow()
-        action.error = None
-        await session.commit()
-        return {"status": "SENT", "to": recipient.email}
-

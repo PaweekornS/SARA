@@ -1,17 +1,30 @@
 """
-SARA Domain-Specific Summarization Templates (M3/v3.0.0-PROD)
+รูปแบบการสรุปตามประเภทการประชุม
 
-Provides modular prompt architectures tailored for specific meeting types:
-1. General Secretary / Executive
-2. Marketing & Growth Strategy
-3. Accounting & Financial Budgeting
-4. Tech / Agile Standup
+ทุก template ตอบ JSON ที่มีคีย์ร่วมกัน 3 ตัว: summary, key_points, action_items
+คีย์อื่นใน `details` เป็นฟิลด์เฉพาะของ template นั้น (เช่น kpis, blockers)
+และ `detail_labels` คือชื่อหัวข้อภาษาไทยที่หน้าจอและไฟล์ .docx ใช้แสดง
 """
 
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict
+from typing import Any
+
+ACTION_ITEMS_SPEC = """  "action_items": [
+    {
+      "task": "งานที่ต้องทำ เขียนให้ชัดว่าทำอะไร",
+      "owner": "ชื่อหรือ Speaker N ที่รับงาน หรือ \\"\\" ถ้าไม่ระบุ",
+      "deadline": "YYYY-MM-DD หรือ null ถ้าไม่ได้ระบุวันที่ชัดเจน",
+      "segment_index": 12
+    }
+  ]"""
+
+COMMON_RULES = """
+กฎ:
+- สรุปจากบันทึกที่ให้เท่านั้น ห้ามแต่งตัวเลข ชื่อ หรือวันที่ที่ไม่มีในบทสนทนา
+- segment_index คือเลขในวงเล็บเหลี่ยม [n] หน้าท่อนที่พูดถึงงานนั้น
+- ตอบกลับเป็น JSON ก้อนเดียวเท่านั้น ไม่ต้องมีคำอธิบายอื่น"""
 
 
 class MeetingTemplateType(str, Enum):
@@ -21,163 +34,146 @@ class MeetingTemplateType(str, Enum):
     TECH_STANDUP = "tech_standup"
 
 
-TEMPLATES: Dict[MeetingTemplateType, Dict[str, Any]] = {
+TEMPLATES: dict[MeetingTemplateType, dict[str, Any]] = {
     MeetingTemplateType.GENERAL: {
         "id": "general",
-        "name": "เลขานุการทั่วไป / ผู้บริหาร (Executive Summary)",
-        "description": "เน้นมติที่ประชุม (Decisions), ข้อตกลงร่วมกัน, และ Action Items (ใคร ทำอะไร ส่งเมื่อไหร่)",
-        "system_prompt": """คุณคือผู้ช่วยเลขานุการและผู้บริหารมืออาชีพ สรุปมติและสาระสำคัญจากการประชุม
+        "name": "ทั่วไป (Executive Summary)",
+        "description": "สรุปภาพรวม ประเด็นสำคัญ ข้อตกลง และงานที่ต้องทำต่อ",
+        "detail_labels": {"decisions": "ข้อตกลง", "next_steps": "ขั้นตอนถัดไป"},
+        "system_prompt": f"""คุณคือผู้ช่วยสรุปการประชุมมืออาชีพ
 ภารกิจ:
-1. สรุปภาพรวมการประชุม (summary): สรุปสาระสำคัญอย่างกระชับ ชัดเจน ตัดบทสนทนาที่ไม่จำเป็นออก (ห้ามระบุวันที่จัดประชุม)
-2. ประเด็นสำคัญ (key_points): หัวข้อสรุป 2-5 ข้อ
-3. มติและข้อตกลง (decisions): รายการการอนุมัติ ข้อตกลง หรือนโยบายที่เคาะแล้ว
-4. รายการงานที่ต้องทำต่อ (action_items): ระบุชัดเจนว่า [Speaker N] หรือฝ่ายใด ต้องทำอะไร ส่งเมื่อไหร่
-5. ขั้นตอนต่อไป (next_steps): ลำดับงานถัดไป
+1. summary: สรุปภาพรวมอย่างกระชับ ตัดบทสนทนาที่ไม่จำเป็นออก
+2. key_points: ประเด็นสำคัญ 2-5 ข้อ
+3. decisions: ข้อตกลงหรือการตัดสินใจที่ชัดเจนแล้ว
+4. action_items: งานที่ต้องทำต่อ ใครทำ เสร็จเมื่อไร
+5. next_steps: ขั้นตอนถัดไป
 
-ตอบกลับเป็น JSON เท่านั้น:
-{
-  "summary": "ข้อความสรุปภาพรวม...",
-  "key_points": ["ประเด็น 1", "ประเด็น 2"],
-  "decisions": [
-    {
-      "text": "ข้อความมติหรือข้อตกลงที่ชัดเจน",
-      "assigned_speaker": "Speaker 1 หรือ ไม่ระบุ",
-      "category": "operations",
-      "confidence": 0.95
-    }
-  ],
-  "action_items": [
-    {
-      "task": "รายละเอียดงานที่ต้องทำ",
-      "assigned_speaker": "Speaker 2",
-      "deadline": "วันศุกร์นี้ หรือ YYYY-MM-DD หรือ null",
-      "priority": "high | medium | low"
-    }
-  ],
-  "next_steps": ["ขั้นตอนต่อไป 1"],
-  "new_resolutions": [],
-  "updates": [],
-  "speakers": []
-}""",
-        "output_schema": ["summary", "key_points", "decisions", "action_items", "next_steps"],
+ตอบกลับเป็น JSON:
+{{
+  "summary": "...",
+  "key_points": ["..."],
+  "decisions": ["..."],
+{ACTION_ITEMS_SPEC},
+  "next_steps": ["..."]
+}}
+{COMMON_RULES}""",
     },
     MeetingTemplateType.MARKETING: {
         "id": "marketing",
         "name": "การตลาดและการเติบโต (Marketing & Growth)",
-        "description": "เน้นวัตถุประสงค์แคมเปญ, กลุ่มเป้าหมาย, ช่องทางการสื่อสาร, ไอเดียสร้างสรรค์, KPIs และ Action Plan",
-        "system_prompt": """คุณคือนักวางแผนกลยุทธ์การตลาดและการเติบโต (Marketing & Growth Strategist)
+        "description": "วัตถุประสงค์แคมเปญ กลุ่มเป้าหมาย ช่องทาง ไอเดีย KPI และแผนงาน",
+        "detail_labels": {
+            "campaign_objectives": "วัตถุประสงค์แคมเปญ",
+            "target_audience": "กลุ่มเป้าหมาย",
+            "channels": "ช่องทาง",
+            "creative_ideas": "ไอเดียสร้างสรรค์",
+            "kpis": "ตัวชี้วัด (KPI)",
+        },
+        "system_prompt": f"""คุณคือนักวางแผนกลยุทธ์การตลาดและการเติบโต
 ภารกิจ:
-1. สรุปภาพรวมแคมเปญ/กลยุทธ์ (summary): สรุปทิศทางการตลาดที่คุยในที่ประชุม
-2. วัตถุประสงค์และกลุ่มเป้าหมาย (campaign_objectives & target_audience): ลูกค้ากลุ่มไหน ต้องการผลลัพธ์อะไร
-3. ช่องทางการสื่อสารและไอเดียสร้างสรรค์ (channels & creative_ideas): ไอเดีย คอนเทนต์ ช่องทางโปรโมท
-4. ตัวชี้วัดความสำเร็จ (kpis): เป้าหมายตัวเลข เช่น GMV, CPL, ROAS, Reach, Conversion
-5. แผนปฏิบัติการ (action_plan): งานที่แต่ละคนรับผิดชอบ
+1. summary: ทิศทางการตลาดที่คุยกัน
+2. key_points: ประเด็นสำคัญ 2-5 ข้อ
+3. campaign_objectives และ target_audience
+4. channels และ creative_ideas
+5. kpis: เป้าหมายตัวเลข เช่น GMV, ROAS, Conversion
+6. action_items: งานที่แต่ละคนรับผิดชอบ
 
-ตอบกลับเป็น JSON เท่านั้น:
-{
-  "summary": "ข้อความสรุปกลยุทธ์การตลาด...",
-  "campaign_objectives": "วัตถุประสงค์หลักของแคมเปญ...",
-  "target_audience": "กลุ่มเป้าหมาย เช่น วัยรุ่น 18-25 ปี...",
-  "channels": ["Facebook", "TikTok", "KOL"],
-  "creative_ideas": ["คอนเทนต์แนว Real-time", "จัด Flash sale"],
-  "kpis": ["GMV 5.0M THB", "ROAS > 4.0x"],
-  "action_plan": [
-    {
-      "task": "ส่ง Key Visual และ Copy",
-      "assigned_speaker": "Speaker 2",
-      "deadline": "วันพุธหน้า"
-    }
-  ],
-  "new_resolutions": [],
-  "updates": [],
-  "speakers": []
-}""",
-        "output_schema": ["summary", "campaign_objectives", "target_audience", "channels", "creative_ideas", "kpis", "action_plan"],
+ตอบกลับเป็น JSON:
+{{
+  "summary": "...",
+  "key_points": ["..."],
+  "campaign_objectives": "...",
+  "target_audience": "...",
+  "channels": ["..."],
+  "creative_ideas": ["..."],
+  "kpis": ["..."],
+{ACTION_ITEMS_SPEC}
+}}
+{COMMON_RULES}""",
     },
     MeetingTemplateType.FINANCE: {
         "id": "finance",
         "name": "บัญชีและการเงิน (Financial & Budgeting)",
-        "description": "เน้นการจัดสรรงบประมาณ, แจกแจงต้นทุน, ตัวเลขทางการเงิน, กระแสเงินสด และความเสี่ยง",
-        "system_prompt": """คุณคือนักวิเคราะห์การเงินและบัญชีอาวุโส (Financial Analyst)
+        "description": "งบประมาณ ต้นทุน ความเสี่ยง และรายการที่รออนุมัติ",
+        "detail_labels": {
+            "budget_allocation": "การจัดสรรงบประมาณ",
+            "cost_breakdown": "รายการค่าใช้จ่าย",
+            "financial_risks": "ความเสี่ยงทางการเงิน",
+            "approvals_required": "รายการที่รออนุมัติ",
+        },
+        "system_prompt": f"""คุณคือนักวิเคราะห์การเงินและบัญชีอาวุโส
 ภารกิจ:
-1. สรุปภาพรวมทางการเงิน (summary): สรุปสถานะงบประมาณหรือการตัดสินใจทางการเงิน (ห้ามแต่งเติมตัวเลขที่ไม่มีในบทสนทนาเด็ดขาด)
-2. การจัดสรรงบประมาณ (budget_allocation): แจกแจงงบที่ได้รับอนุมัติหรือขอเพิ่ม
-3. รายการค่าใช้จ่ายและต้นทุน (cost_breakdown): รายละเอียดค่าใช้จ่ายแต่ละรายการ
-4. ความเสี่ยงทางการเงินและภาษี (financial_risks): ข้อพึงระวัง หรือเงื่อนไขสัญญา
-5. รายการที่ต้องรออนุมัติ (approvals_required): วงเงินที่ต้องผ่านการพิจารณาต่อ
+1. summary: สถานะงบประมาณหรือการตัดสินใจทางการเงิน
+2. key_points: ประเด็นสำคัญ 2-5 ข้อ
+3. budget_allocation: งบที่อนุมัติหรือขอเพิ่ม
+4. cost_breakdown, financial_risks, approvals_required
+5. action_items: งานที่ต้องทำต่อ
 
-ตอบกลับเป็น JSON เท่านั้น:
-{
-  "summary": "ข้อความสรุปสถานะงบประมาณ...",
-  "budget_allocation": [
-    {
-      "item": "จัดซื้อ Cloud Server",
-      "amount": "150,000 บาท",
-      "source": "งบกลาง"
-    }
-  ],
-  "cost_breakdown": ["ค่าบริการรายเดือน 12,000 บาท", "ค่า Setup 30,000 บาท"],
-  "financial_risks": ["อัตราแลกเปลี่ยนผันผวน", "ภาษีหัก ณ ที่จ่าย 3%"],
-  "approvals_required": ["เสนอผู้มีอำนาจลงนามสัปดาห์หน้า"],
-  "new_resolutions": [],
-  "updates": [],
-  "speakers": []
-}""",
-        "output_schema": ["summary", "budget_allocation", "cost_breakdown", "financial_risks", "approvals_required"],
+ตอบกลับเป็น JSON:
+{{
+  "summary": "...",
+  "key_points": ["..."],
+  "budget_allocation": [{{"item": "...", "amount": "...", "source": "..."}}],
+  "cost_breakdown": ["..."],
+  "financial_risks": ["..."],
+  "approvals_required": ["..."],
+{ACTION_ITEMS_SPEC}
+}}
+{COMMON_RULES}""",
     },
     MeetingTemplateType.TECH_STANDUP: {
         "id": "tech_standup",
         "name": "ทีมพัฒนาและเทคนิค (Tech / Agile Standup)",
-        "description": "เน้นงานที่เสร็จแล้ว, กำลังทำ, ปัญหาติดขัด (Blockers), การตัดสินใจด้านสถาปัตยกรรม และ Release Plan",
-        "system_prompt": """คุณคือ Technical Lead / Scrum Master สรุปการประชุมทางเทคนิคหรือ Daily Standup
+        "description": "งานที่เสร็จ งานที่กำลังทำ ปัญหาติดขัด และกำหนดการ release",
+        "detail_labels": {
+            "completed_tasks": "งานที่เสร็จแล้ว",
+            "in_progress": "งานที่กำลังทำ",
+            "blockers": "ปัญหาติดขัด",
+            "deploy_schedule": "กำหนดการ release",
+        },
+        "system_prompt": f"""คุณคือ Technical Lead / Scrum Master
 ภารกิจ:
-1. สรุปภาพรวมสถานะระบบ (summary): สรุปความพร้อมของระบบและสปรินต์ปัจจุบัน
-2. งานที่เสร็จแล้ว (completed_tasks): รายการฟีเจอร์หรือบั๊กที่แก้เสร็จแล้ว
-3. งานที่กำลังดำเนินการ (in_progress): งานที่กำลังพัฒนาอยู่ แยกตาม [Speaker N]
-4. ปัญหาและอุปสรรค (blockers): สิ่งที่ติดขัด หรือ dependency ที่รอทีมอื่น
-5. กำหนดการ Release และทดสอบ (deploy_schedule): วันเวลา deploy หรือ QA test
+1. summary: ความคืบหน้าของสปรินต์และความพร้อมของระบบ
+2. key_points: ประเด็นสำคัญ 2-5 ข้อ
+3. completed_tasks, in_progress, blockers
+4. deploy_schedule: วันเวลา deploy หรือ QA
+5. action_items: งานที่ต้องทำต่อ
 
-ตอบกลับเป็น JSON เท่านั้น:
-{
-  "summary": "สรุปความคืบหน้าสปรินต์ที่ 14...",
-  "completed_tasks": ["แก้ไขปัญหา Token Expire", "เพิ่ม Google OAuth API"],
-  "in_progress": [
-    {
-      "task": "เชื่อมต่อ MCP Email Dispatch",
-      "assigned_speaker": "Speaker 1"
-    }
-  ],
-  "blockers": ["รอ API Key จากพาร์ทเนอร์"],
-  "deploy_schedule": "Release UAT วันพฤหัสบดี 18:00 น.",
-  "new_resolutions": [],
-  "updates": [],
-  "speakers": []
-}""",
-        "output_schema": ["summary", "completed_tasks", "in_progress", "blockers", "deploy_schedule"],
+ตอบกลับเป็น JSON:
+{{
+  "summary": "...",
+  "key_points": ["..."],
+  "completed_tasks": ["..."],
+  "in_progress": ["..."],
+  "blockers": ["..."],
+  "deploy_schedule": "...",
+{ACTION_ITEMS_SPEC}
+}}
+{COMMON_RULES}""",
     },
 }
 
 
-def get_template(template_id: str | MeetingTemplateType | None) -> Dict[str, Any]:
-    """Retrieve template definition by ID or enum, defaulting to general template."""
-    if not template_id:
-        return TEMPLATES[MeetingTemplateType.GENERAL]
-
-    val = template_id.value if isinstance(template_id, MeetingTemplateType) else str(template_id).lower()
-    for key, tmpl in TEMPLATES.items():
-        if key.value == val or tmpl["id"] == val:
+def get_template(template_id: str | MeetingTemplateType | None) -> dict[str, Any]:
+    """คืน template ตาม id ถ้าไม่รู้จักให้ใช้แบบทั่วไป"""
+    value = template_id.value if isinstance(template_id, MeetingTemplateType) else str(template_id or "").lower()
+    for tmpl in TEMPLATES.values():
+        if tmpl["id"] == value:
             return tmpl
     return TEMPLATES[MeetingTemplateType.GENERAL]
 
 
-def list_templates() -> list[Dict[str, Any]]:
-    """Return public list of templates for UI dropdowns and API metadata."""
+def is_known_template(template_id: str) -> bool:
+    return any(tmpl["id"] == template_id for tmpl in TEMPLATES.values())
+
+
+def list_templates() -> list[dict[str, Any]]:
     return [
         {
             "id": tmpl["id"],
             "name": tmpl["name"],
             "description": tmpl["description"],
-            "output_schema": tmpl["output_schema"],
+            "detail_labels": tmpl["detail_labels"],
         }
         for tmpl in TEMPLATES.values()
     ]
