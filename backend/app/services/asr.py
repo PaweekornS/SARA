@@ -24,10 +24,18 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(
-    base_url=f"{settings.ASR_URL.rstrip('/')}/v1",
-    api_key=settings.APP_AI4THAI_API_KEY,
-)
+if settings.use_openrouter:
+    # ชั่วคราว (demo): Whisper บน OpenRouter ตรวจภาษาเอง จึงไม่ส่ง language ไป
+    client = OpenAI(base_url=settings.OPENROUTER_BASE_URL, api_key=settings.APP_OPENROUTER_API_KEY)
+    _MODEL = settings.OPENROUTER_ASR_MODEL
+    _LANGUAGE: dict = {}
+else:
+    client = OpenAI(
+        base_url=f"{settings.ASR_URL.rstrip('/')}/v1",
+        api_key=settings.APP_AI4THAI_API_KEY,
+    )
+    _MODEL = settings.ASR_MODEL
+    _LANGUAGE = {"language": "th"}
 
 # ลิมิตขนาดไฟล์และความยาว chunk ที่เหมาะสมที่สุดสำหรับ ASR (10 นาที หรือ 20 MB)
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -178,9 +186,9 @@ def _call_asr_api(file_path: str, offset_ms: int) -> Transcript:
     try:
         with open(file_path, "rb") as fh:
             raw = client.audio.transcriptions.create(
-                model=settings.ASR_MODEL,
+                model=_MODEL,
                 file=(filename, fh),
-                language="th",
+                **_LANGUAGE,
                 response_format="verbose_json",
             )
         return _from_verbose(raw, offset_ms)
@@ -193,9 +201,9 @@ def _call_asr_api(file_path: str, offset_ms: int) -> Transcript:
     try:
         with open(file_path, "rb") as fh:
             raw = client.audio.transcriptions.create(
-                model=settings.ASR_MODEL,
+                model=_MODEL,
                 file=(filename, fh),
-                language="th",
+                **_LANGUAGE,
                 response_format="json",
             )
     except Exception as err:  # noqa: BLE001

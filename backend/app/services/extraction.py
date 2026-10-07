@@ -18,7 +18,7 @@ from datetime import date
 from typing import Callable
 
 from app.core.config import settings
-from app.services.llm import LlmError, chat_json
+from app.services.llm import LlmError, chat_json, detect_language, language_rule
 from app.services.templates import get_template
 
 logger = logging.getLogger(__name__)
@@ -202,6 +202,7 @@ def _run_chunked(
     build_user: Callable[[str, str], str],
     overhead_text: str = "",
 ) -> list[dict]:
+    system += language_rule(detect_language(" ".join(s.text for s in segments[:200])))
     budget = _transcript_token_budget(system + overhead_text)
     chunks = chunk_segments(segments, budget)
     total = len(chunks)

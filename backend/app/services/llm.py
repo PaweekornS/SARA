@@ -19,18 +19,31 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(
-    base_url=settings.PATHUMMA_BASE_URL,
-    api_key=settings.APP_AI4THAI_API_KEY,
-    timeout=settings.LLM_TIMEOUT_SECONDS,
-    max_retries=3,
-)
-
-# AI4Thai gateway ต้องการ apikey header เพิ่มจาก Authorization ปกติ
-_EXTRA_HEADERS = {
-    "apikey": settings.APP_AI4THAI_API_KEY,
-    "x-api-key": settings.APP_AI4THAI_API_KEY,
-}
+if settings.use_openrouter:
+    MODEL = settings.OPENROUTER_LLM_MODEL
+    client = OpenAI(
+        base_url=settings.OPENROUTER_BASE_URL,
+        api_key=settings.APP_OPENROUTER_API_KEY,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=3,
+    )
+    _EXTRA_HEADERS = {"X-Title": "SARA demo"}
+    # qwen3.5 คิดยาวก่อนตอบเป็นค่าเริ่มต้น — ปิดไว้ให้ถูกและเร็ว
+    _EXTRA_BODY: dict | None = {"reasoning": {"enabled": False}}
+else:
+    MODEL = settings.PATHUMMA_MODEL_NAME
+    client = OpenAI(
+        base_url=settings.PATHUMMA_BASE_URL,
+        api_key=settings.APP_AI4THAI_API_KEY,
+        timeout=settings.LLM_TIMEOUT_SECONDS,
+        max_retries=3,
+    )
+    # AI4Thai gateway ต้องการ apikey header เพิ่มจาก Authorization ปกติ
+    _EXTRA_HEADERS = {
+        "apikey": settings.APP_AI4THAI_API_KEY,
+        "x-api-key": settings.APP_AI4THAI_API_KEY,
+    }
+    _EXTRA_BODY = None
 
 
 # ── Classes & Exceptions ─────────────────────────────────────────────────────
@@ -46,21 +59,25 @@ def chat(
     temperature: float = 0.2,
     json_mode: bool = False,
     max_tokens: int = 2048,
+    model: str | None = None,
 ) -> str:
+    model = model or MODEL
     kwargs = {
-        "model": settings.PATHUMMA_MODEL_NAME,
+        "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "extra_headers": _EXTRA_HEADERS,
     }
+    if _EXTRA_BODY:
+        kwargs["extra_body"] = _EXTRA_BODY
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
 
     try:
         response = client.chat.completions.create(**kwargs)
     except Exception as err:  # noqa: BLE001
-        raise LlmError(f"เรียก {settings.PATHUMMA_MODEL_NAME} ไม่สำเร็จ: {err}") from err
+        raise LlmError(f"เรียก {model} ไม่สำเร็จ: {err}") from err
 
     content = (response.choices[0].message.content or "").strip()
     if "</think>" in content:
@@ -128,6 +145,24 @@ def _parse_json(raw: str) -> dict:
     raise LlmError("โมเดลตอบกลับมาโดยไม่มี JSON")
 
 
+_THAI_CHAR = re.compile(r"[฀-๿]")
+_LATIN_CHAR = re.compile(r"[A-Za-z]")
+
+
+def detect_language(text: str) -> str:
+    """'th' หรือ 'en' — นับอักษรไทยเทียบอักษรละติน (คำอังกฤษปนในประชุมไทยยังนับเป็นไทย)"""
+    thai = len(_THAI_CHAR.findall(text))
+    latin = len(_LATIN_CHAR.findall(text))
+    return "th" if thai * 3 >= latin and thai > 0 else "en" if latin else "th"
+
+
+def language_rule(lang: str) -> str:
+    """ต่อท้าย system prompt เพื่อบังคับภาษาของผลลัพธ์ (คีย์ JSON คงเดิม)"""
+    if lang == "en":
+        return "\n- The meeting is in English: write every text value in English. Keep the JSON keys exactly as specified."
+    return "\n- เขียนทุกข้อความเป็นภาษาไทย"
+
+
 def answer_from_context(question: str, context: str) -> str:
     """
     ตอบคำถามโดยอิงบริบทที่ส่งให้เท่านั้น
@@ -136,7 +171,7 @@ def answer_from_context(question: str, context: str) -> str:
     system = (
         "คุณคือผู้ช่วยที่ตอบคำถามเกี่ยวกับการประชุมของผู้ใช้ โดยอ้างอิงจากข้อมูลด้านล่างเท่านั้น\n"
         "ถ้าข้อมูลไม่ครอบคลุมคำถาม ให้ตอบตรง ๆ ว่าไม่พบในบันทึกการประชุม ห้ามเดาหรือเติมเอง\n"
-        "ตอบเป็นภาษาไทย กระชับ ไม่เกิน 5 ประโยค\n\n"
+        f"{'ตอบเป็นภาษาไทย' if detect_language(question) == 'th' else 'Answer in English'} กระชับ ไม่เกิน 5 ประโยค\n\n"
         f"--- ข้อมูลการประชุม ---\n{context}\n-----------------------"
     )
     raw = chat(

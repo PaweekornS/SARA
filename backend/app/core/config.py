@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # AI4Thai Pathumma / ThaiLLM
-    APP_AI4THAI_API_KEY: str
+    APP_AI4THAI_API_KEY: str = ""
     PATHUMMA_BASE_URL: str = "https://tokenmind.pathumma.in.th/v1"
     PATHUMMA_MODEL_NAME: str = "thaillm-8b"
     LLM_TIMEOUT_SECONDS: int = 180
@@ -44,6 +44,17 @@ class Settings(BaseSettings):
     # ASR
     ASR_URL: str = "https://tokenmind.pathumma.in.th"
     ASR_MODEL: str = "ptm-asr-1"
+
+    # ชั่วคราว (branch demo/openrouter): ตั้ง key นี้แล้ว LLM, ASR และ embedding จะวิ่งผ่าน OpenRouter แทน AI4Thai
+    APP_OPENROUTER_API_KEY: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    OPENROUTER_LLM_MODEL: str = "qwen/qwen3.5-9b"
+    OPENROUTER_ASR_MODEL: str = "openai/whisper-large-v3-turbo"
+    OPENROUTER_EMBEDDING_MODEL: str = "baai/bge-m3"
+
+    @property
+    def use_openrouter(self) -> bool:
+        return bool(self.APP_OPENROUTER_API_KEY)
 
     # ตัวแปรที่ขึ้นต้นด้วย APP_ คือความลับ — บน GitLab ผูกกับ CI variable
 

@@ -50,6 +50,21 @@ class FastEmbedder:
         return [vector.tolist() for vector in self._model.embed(texts, batch_size=BATCH)]
 
 
+class ApiEmbedder:
+    """ชั่วคราว (demo): BGE-M3 ผ่าน OpenRouter embeddings API"""
+
+    def __init__(self, model_name: str) -> None:
+        from openai import OpenAI
+
+        self._model = model_name
+        self._client = OpenAI(base_url=settings.OPENROUTER_BASE_URL, api_key=settings.APP_OPENROUTER_API_KEY, timeout=60)
+        self.dim = len(self.embed(["probe"])[0])
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        response = self._client.embeddings.create(model=self._model, input=texts)
+        return [d.embedding for d in sorted(response.data, key=lambda d: d.index)]
+
+
 @dataclass
 class Chunk:
     meeting_id: UUID
@@ -86,7 +101,11 @@ def _get() -> tuple[QdrantClient, Embedder]:
     with _lock:
         try:
             if _embedder is None:
-                _embedder = FastEmbedder(settings.EMBEDDING_MODEL, settings.EMBEDDING_CACHE_DIR)
+                _embedder = (
+                    ApiEmbedder(settings.OPENROUTER_EMBEDDING_MODEL)
+                    if settings.use_openrouter
+                    else FastEmbedder(settings.EMBEDDING_MODEL, settings.EMBEDDING_CACHE_DIR)
+                )
             if _client is None:
                 _client = QdrantClient(url=settings.QDRANT_URL, timeout=10)
             if not _ready_collection:
@@ -99,6 +118,12 @@ def _get() -> tuple[QdrantClient, Embedder]:
 
 def _ensure_collection(client: QdrantClient, dim: int) -> None:
     name = settings.QDRANT_COLLECTION
+    if client.collection_exists(name):
+        size = client.get_collection(name).config.params.vectors.size
+        if size != dim:
+            #  เปลี่ยนโมเดล embedding (เช่น 384 → 1024) — ดัชนีเดิมใช้ไม่ได้แล้ว ลบทิ้งแล้วสร้างใหม่
+            logger.warning("Qdrant collection %s มีขนาด %s แต่ embedder ใช้ %s — สร้างใหม่", name, size, dim)
+            client.delete_collection(name)
     if not client.collection_exists(name):
         client.create_collection(name, vectors_config=models.VectorParams(size=dim, distance=models.Distance.COSINE))
     for field in ("user_id", "collection_id", "meeting_id"):
